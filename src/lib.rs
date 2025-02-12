@@ -1,9 +1,17 @@
 use std::io::Cursor;
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use std::io::Read;
-use std::fmt;
+use std::{default, fmt};
+use std::sync::Mutex;
 
 const DLT_ID_SIZE: usize = 4;
+
+const DLT_STORAGE_HEADER_SIZE: usize = 16;
+const DLT_STANDARD_HEADER_SIZE: usize = 4;
+const DLT_EXTENDED_HEADER_SIZE: usize = 10;
+const DLT_STANDARD_HEADER_EXTRA_SIZE: usize = 12;
+const DLT_STANDARD_HEADER_EXTRA_NOSESSIONID_SIZE: usize = 8;
+const DLT_PAYLOAD_HEADER_SIZE: usize = 6;
 
 const UEH_MASK: u8  = 0x01; // Bit 0: Use Extended Header
 const MSBF_MASK: u8 = 0x02; // Bit 1: Most Significant Byte First
@@ -12,6 +20,7 @@ const WSID_MASK: u8 = 0x08; // Bit 3: With Session ID
 const WTMS_MASK: u8 = 0x10; // Bit 4: With Timestamp
 const VERS_MASK: u8 = 0xE0; // Bit 5-7: Version Number (11100000)
 
+static Internal_binary: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 pub enum DLTMessageType {
     LOG,
@@ -39,21 +48,27 @@ pub struct DltHTYP {
 }
 
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub struct DltStandardHeader {
     htyp:   u8,
     mcnt:   u8,
     len:    u16,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub struct DltStandardHeaderExtra {
     ecu: [u8; DLT_ID_SIZE],
     seid: u32,
     tmsp: u32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
+pub struct DltStandardHeaderExtraNoSessionID {
+    ecu: [u8; DLT_ID_SIZE],
+    tmsp: u32,
+}
+
+#[derive(Debug, PartialEq, Default)]
 pub struct DltExtendedHeader {
     msin: u8,
     noar: u8,
@@ -61,8 +76,17 @@ pub struct DltExtendedHeader {
     ctid: [u8; DLT_ID_SIZE],
 }
 
+#[derive(Debug, PartialEq, Default)]
+pub struct DltFormat{
+    pub standard_header: DltStandardHeader,
+    pub standard_header_extra: DltStandardHeaderExtra,
+    pub standard_header_extra_nosession_id: DltStandardHeaderExtraNoSessionID,
+    pub extended_header: DltExtendedHeader,
+    pub payload_header: Vec<u8>,
+    pub payload: Vec<u8>,
+}
 
-fn dlt_standard_header_parser(cursor: &mut Cursor<&[u8]>) -> DltStandardHeader {
+fn dlt_standard_header_parser(cursor: &mut Cursor<Vec<u8>>) -> DltStandardHeader {
     //let mut cursor = Cursor::new(data);
 
     let htyp = cursor.read_u8().unwrap();
@@ -72,7 +96,7 @@ fn dlt_standard_header_parser(cursor: &mut Cursor<&[u8]>) -> DltStandardHeader {
     DltStandardHeader { htyp, mcnt, len }
 }
 
-fn dlt_standard_header_extra_parser(cursor: &mut Cursor<&[u8]>) -> DltStandardHeaderExtra {
+fn dlt_standard_header_extra_parser(cursor: &mut Cursor<Vec<u8>>) -> DltStandardHeaderExtra {
     //let mut cursor = Cursor::new(data);
 
     let mut ecu = [0u8; DLT_ID_SIZE];
@@ -82,6 +106,60 @@ fn dlt_standard_header_extra_parser(cursor: &mut Cursor<&[u8]>) -> DltStandardHe
 
     DltStandardHeaderExtra { ecu, seid, tmsp }
 }
+
+fn dlt_standard_header_extra_no_session_id_parser(cursor: &mut Cursor<Vec<u8>>) -> DltStandardHeaderExtraNoSessionID {
+    //let mut cursor = Cursor::new(data);
+
+    let mut ecu = [0u8; DLT_ID_SIZE];
+    cursor.read_exact(&mut ecu).unwrap();
+    let tmsp = cursor.read_u32::<BigEndian>().unwrap();
+
+    DltStandardHeaderExtraNoSessionID { ecu, tmsp }
+}
+
+fn dlt_extended_header_parser(cursor: &mut Cursor<Vec<u8>>) -> DltExtendedHeader {
+    let msin = cursor.read_u8().unwrap();
+    let noar = cursor.read_u8().unwrap();
+    let mut apid = [0u8; DLT_ID_SIZE];
+    cursor.read_exact(&mut apid).unwrap();
+    let mut ctid = [0u8; DLT_ID_SIZE];
+    cursor.read_exact(&mut ctid).unwrap();
+
+    DltExtendedHeader { msin, noar, apid, ctid }
+}
+
+fn dlt_payload_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> (Vec<u8>, Vec<u8>) {
+    let mut payload_header = vec![0u8; 6];
+    let mut payload = vec![0u8; len];
+
+    // cursor.read_exact(&mut payload_header).unwrap();
+    // cursor.read_exact(&mut payload).unwrap();
+
+    match cursor.read_exact(&mut payload_header) {
+        Ok(_) => {
+            // Successfully read payload_header and payload
+            println!("Successfully read payload_header and payload");
+        }
+        Err(e) => {
+            // Handle error for reading payload
+            println!("Error reading payload: {}", e);
+        }
+    }
+
+    match cursor.read_exact(&mut payload) {
+        Ok(_) => {
+            // Successfully read payload_header and payload
+            println!("Successfully read payload_header and payload");
+        }
+        Err(e) => {
+            // Handle error for reading payload
+            println!("Error reading payload: {}", e);
+        }
+    }
+
+    (payload_header, payload)
+}
+
 
 
 // { UEH: true, MSBF: false, WEID: true, WSID: true, WTMS: true, VERS: 1 }
@@ -128,6 +206,17 @@ impl DltStandardHeader {
 }
 
 impl DltStandardHeaderExtra {
+    pub fn get_ecu(&self) -> String{
+        match std::str::from_utf8(&self.ecu) {
+            Ok(ecu_str) => ecu_str.to_string(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    pub fn get_timestamp(&self) -> u32{
+        self.tmsp
+    }
+
     pub fn debug_print(&self){
         match std::str::from_utf8(&self.ecu) {
             Ok(ecu_str) => println!("ECU: {}", ecu_str),
@@ -138,31 +227,115 @@ impl DltStandardHeaderExtra {
     }
 }
 
+impl DltExtendedHeader{
+    pub fn get_apid(&self) -> String{
+        match std::str::from_utf8(&self.apid) {
+            Ok(str) => str.to_string(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    pub fn get_ctid(&self) -> String{
+        match std::str::from_utf8(&self.ctid) {
+            Ok(str) => str.to_string(),
+            Err(e) => e.to_string(),
+        }
+    }
+}
+
 
 // The feature image
 // When you provide the binary array, you will get the splited dlt message
 //  
 // 
+
+
 pub trait DltParse {
-    fn dlt_parse(&self) -> (DltStandardHeader,
-                            DltStandardHeaderExtra,
-                            Vec<u8>);
+    fn dlt_parse(&self) -> Vec<DltFormat>;
 }
 
 impl DltParse for [u8] {
-    fn dlt_parse(&self) -> (DltStandardHeader,
-                            DltStandardHeaderExtra,
-                            Vec<u8>) {
-        let mut cursor = Cursor::new(self);
-        let mut remaining_data: Vec<u8> = Vec::new();
-
+    fn dlt_parse(&self) -> Vec<DltFormat> {
         
-        let dlt_standard_header = dlt_standard_header_parser(&mut cursor);
-        let dlt_standard_header_extra = dlt_standard_header_extra_parser(&mut cursor);
-        remaining_data.extend_from_slice(&self[cursor.position() as usize..]);                    
         
+        let mut Internal_binary_ps = Internal_binary.lock().unwrap();
+        Internal_binary_ps.extend(self);
 
-        (dlt_standard_header, dlt_standard_header_extra, remaining_data)
+        let mut dlt_response: Vec<DltFormat> = Vec::new();
+
+        let mut cursor: Cursor<Vec<u8>> = Cursor::new(Internal_binary_ps.to_vec());
+        println!("internal len: {}", Internal_binary_ps.len());
+        
+        loop {
+
+            if  (cursor.get_ref().len() - cursor.position() as usize) < (DLT_STANDARD_HEADER_SIZE + DLT_STANDARD_HEADER_EXTRA_SIZE)
+            {
+                Internal_binary_ps.clear();
+                cursor.read_to_end(&mut Internal_binary_ps).unwrap();
+                println!("internal new length : {}", Internal_binary_ps.len());
+
+                println!("llh1");
+                break;
+            }
+            println!("diff len {}", (cursor.get_ref().len() - cursor.position() as usize));
+
+            let dlt_standard_header: DltStandardHeader = dlt_standard_header_parser(&mut cursor);
+            let mut dlt_standard_header_extra: DltStandardHeaderExtra = Default::default();
+            let mut dlt_standard_header_extra_nosession_id: DltStandardHeaderExtraNoSessionID = Default::default();
+            let mut payload: Vec<u8> = vec![];
+            let mut payload_header: Vec<u8> = vec![];
+            let mut dlt_extended_header  = Default::default();
+            
+            
+            println!("dlt len: {}", dlt_standard_header.len);
+            println!("{:?}", dlt_standard_header);
+
+            if (dlt_standard_header.len as usize) < DLT_STANDARD_HEADER_SIZE
+            {
+                Internal_binary_ps.clear();
+                //cursor.read_to_end(&mut Internal_binary_ps).unwrap();
+                println!("llh2");
+                break;
+            }
+            
+
+            if (cursor.get_ref().len() - cursor.position() as usize) < (dlt_standard_header.len as usize - DLT_STANDARD_HEADER_SIZE)
+            {
+                println!("llh3");
+                break;
+            }else{
+                if dlt_standard_header.get_htyp().WSID
+                {
+                    // log message
+                    dlt_standard_header_extra = dlt_standard_header_extra_parser(&mut cursor);
+                    dlt_extended_header = dlt_extended_header_parser(&mut cursor);
+                    let payload_length = dlt_standard_header.len as usize - (DLT_STANDARD_HEADER_SIZE + DLT_STANDARD_HEADER_EXTRA_SIZE + DLT_EXTENDED_HEADER_SIZE + DLT_PAYLOAD_HEADER_SIZE);
+                    (payload_header, payload) = dlt_payload_parser(&mut cursor, payload_length);
+                    
+                }else{
+                    // trace message
+                    dlt_standard_header_extra_nosession_id = dlt_standard_header_extra_no_session_id_parser(&mut cursor);
+                    dlt_extended_header = dlt_extended_header_parser(&mut cursor);
+                    let payload_length = dlt_standard_header.len as usize - (DLT_STANDARD_HEADER_SIZE + DLT_STANDARD_HEADER_EXTRA_NOSESSIONID_SIZE + DLT_EXTENDED_HEADER_SIZE + DLT_PAYLOAD_HEADER_SIZE);
+                    (payload_header, payload) = dlt_payload_parser(&mut cursor, payload_length);
+                }
+            }
+
+            println!("{:?}", dlt_extended_header);
+
+            dlt_response.push(DltFormat{
+                standard_header: dlt_standard_header,
+                standard_header_extra: dlt_standard_header_extra,
+                standard_header_extra_nosession_id: dlt_standard_header_extra_nosession_id,
+                extended_header: dlt_extended_header,
+                payload_header: payload_header,
+                payload: payload,
+            });
+
+        }
+
+        dlt_response
+        
     }
 }
 
@@ -173,21 +346,31 @@ mod tests {
 
     #[test]
     fn test_dlt_standard_header_extra_parser() {
-        let data = [
-            0x01,                   // htyp
-            0x02,                   // mcnt
-            0x03, 0x04,             // Length
-            0x44, 0x4C, 0x54, 0x31, // ECU id: "DLT1"
-            0x01, 0x00, 0x00, 0x00, // Session number: 1
-            0x78, 0x56, 0x34, 0x12, // Timestamp: 0x12345678
-            0x00, 0x03,             // remaining
+        let data: [u8; 224] = [
+            0x35, 0x00, 0x00, 0x20, 0x45, 0x43, 0x55, 0x31, 0x27, 0x4b, 0x60, 0x90, 0x26, 0x01, 0x44, 0x41,
+            0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x02, 0x0f, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
+            0x35, 0x00, 0x00, 0x20, 0x45, 0x43, 0x55, 0x31, 0x27, 0x4b, 0x30, 0x45, 0x26, 0x01, 0x44, 0x41,
+            0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x02, 0x0f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+            0x3d, 0x0e, 0x00, 0x4f, 0x45, 0x43, 0x55, 0x31, 0x00, 0x00, 0x65, 0x84, 0x27, 0x4b, 0x30, 0x45,
+            0x41, 0x01, 0x44, 0x4c, 0x54, 0x44, 0x49, 0x4e, 0x54, 0x4d, 0x00, 0x02, 0x00, 0x00, 0x2f, 0x00,
+            0x43, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x20, 0x63, 0x6f, 0x6e, 0x6e, 0x65, 0x63, 0x74, 0x69, 0x6f,
+            0x6e, 0x20, 0x23, 0x37, 0x20, 0x63, 0x6c, 0x6f, 0x73, 0x65, 0x64, 0x2e, 0x20, 0x54, 0x6f, 0x74,
+            0x61, 0x6c, 0x20, 0x43, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x73, 0x20, 0x3a, 0x20, 0x30, 0x00, 0x3d,
+            0x0f, 0x00, 0x58, 0x45, 0x43, 0x55, 0x31, 0x00, 0x00, 0x65, 0x84, 0x27, 0x4b, 0x60, 0x91, 0x41,
+            0x01, 0x44, 0x4c, 0x54, 0x44, 0x49, 0x4e, 0x54, 0x4d, 0x00, 0x02, 0x00, 0x00, 0x38, 0x00, 0x4e,
+            0x65, 0x77, 0x20, 0x63, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x20, 0x63, 0x6f, 0x6e, 0x6e, 0x65, 0x63,
+            0x74, 0x69, 0x6f, 0x6e, 0x20, 0x23, 0x37, 0x20, 0x65, 0x73, 0x74, 0x61, 0x62, 0x6c, 0x69, 0x73,
+            0x68, 0x65, 0x64, 0x2c, 0x20, 0x54, 0x6f, 0x74, 0x61, 0x6c, 0x20, 0x43, 0x6c, 0x69, 0x65, 0x6e,
         ];
-        let (header, header_extra, remaining_data) = data.dlt_parse();
+
+        let dlt_analyzed_data = data.dlt_parse();
+
+        println!("{:?}", dlt_analyzed_data);
 
         let expected_header = DltStandardHeader {
-            htyp: 0x01,
-            mcnt: 0x02,
-            len: 0x0403, // Note the byte order
+            htyp: 61,
+            mcnt: 15,
+            len: 88, // Note the byte order
         };
 
         let expected_header_extra = DltStandardHeaderExtra {
@@ -196,10 +379,61 @@ mod tests {
             tmsp: 0x12345678,
         };
 
+        let expected_header_extra_nosession_id = DltStandardHeaderExtraNoSessionID {
+            ecu: *b"ECU1",
+            tmsp: 659251344,
+        };
 
 
-        assert_eq!(header, expected_header);
-        assert_eq!(header_extra, expected_header_extra);
-        assert_eq!(remaining_data, [0x00, 0x03]);
+
+        assert_eq!(dlt_analyzed_data[0].standard_header, expected_header);
+        //assert_eq!(dlt_analyzed_data.standard_header_extra, expected_header_extra);
+        assert_eq!(dlt_analyzed_data[0].standard_header_extra_nosession_id, expected_header_extra_nosession_id);
+        // assert_eq!(remaining_data, [0x00, 0x03]);
+    }
+
+    #[test]
+    fn test_dlt_paser_log() {
+        let data: [u8; 88] = [
+            0x3d,
+            0x0f, 0x00, 0x58, 0x45, 0x43, 0x55, 0x31, 0x00, 0x00, 0x65, 0x84, 0x27, 0x4b, 0x60, 0x91, 0x41,
+            0x01, 0x44, 0x4c, 0x54, 0x44, 0x49, 0x4e, 0x54, 0x4d, 0x00, 0x02, 0x00, 0x00, 0x38, 0x00, 0x4e,
+            0x65, 0x77, 0x20, 0x63, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x20, 0x63, 0x6f, 0x6e, 0x6e, 0x65, 0x63,
+            0x74, 0x69, 0x6f, 0x6e, 0x20, 0x23, 0x37, 0x20, 0x65, 0x73, 0x74, 0x61, 0x62, 0x6c, 0x69, 0x73,
+            0x68, 0x65, 0x64, 0x2c, 0x20, 0x54, 0x6f, 0x74, 0x61, 0x6c, 0x20, 0x43, 0x6c, 0x69, 0x65, 0x6e,
+            0x74, 0x73, 0x20, 0x3a, 0x20, 0x31, 0x00, 
+        ];
+
+        let dlt_analyzed_data = data.dlt_parse();
+
+        println!("{:?}", dlt_analyzed_data);
+
+        let expected_header = DltStandardHeader {
+            htyp: 0x3d,
+            mcnt: 15,
+            len: 88, // Note the byte order
+        };
+
+        let expected_header_extra = DltStandardHeaderExtra {
+            ecu: *b"ECU1", // "DLT1"
+            seid: 25988,
+            tmsp: 659251345,
+        };
+
+        let expected_exnteded_header = DltExtendedHeader {
+            msin: 65, // "DLT1"
+            noar: 1,
+            apid: *b"DLTD",
+            ctid: *b"INTM",
+        };
+
+        let payload = *b"New client connection #7 established, Total Clients : 1\0";
+
+        assert_eq!(dlt_analyzed_data[0].standard_header, expected_header);
+        assert_eq!(dlt_analyzed_data[0].standard_header_extra, expected_header_extra);
+        //assert_eq!(dlt_analyzed_data.standard_header_extra_nosession_id, expected_header_extra_nosession_id);
+        assert_eq!(dlt_analyzed_data[0].extended_header, expected_exnteded_header);
+        
+        assert_eq!(dlt_analyzed_data[0].payload, payload);
     }
 }
