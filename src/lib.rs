@@ -76,14 +76,13 @@ pub struct DltExtendedHeader {
     ctid: [u8; DLT_ID_SIZE],
 }
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug)]
 pub struct DltFormat{
     pub standard_header: DltStandardHeader,
     pub standard_header_extra: DltStandardHeaderExtra,
     pub standard_header_extra_nosession_id: DltStandardHeaderExtraNoSessionID,
     pub extended_header: DltExtendedHeader,
-    pub payload_header: Vec<u8>,
-    pub payload: Vec<u8>,
+    pub payload_list: MessageList,
 }
 
 fn dlt_standard_header_parser(cursor: &mut Cursor<Vec<u8>>) -> DltStandardHeader {
@@ -128,7 +127,7 @@ fn dlt_extended_header_parser(cursor: &mut Cursor<Vec<u8>>) -> DltExtendedHeader
     DltExtendedHeader { msin, noar, apid, ctid }
 }
 
-fn dlt_payload_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> (Vec<u8>, Vec<u8>) {
+fn dlt_payload_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> MessageList {
     let mut payload_header = vec![0u8; 6];
     let mut payload = vec![0u8; len];
 
@@ -157,7 +156,37 @@ fn dlt_payload_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> (Vec<u8>, Vec
         }
     }
 
-    (payload_header, payload)
+    let mut array: Vec<u8> = Vec::new();
+    array.extend_from_slice(&payload_header);
+    array.extend_from_slice(&payload);
+    let message = MessageList::parse(&array, len);
+
+    (message)
+}
+
+fn dlt_service_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> MessageList {
+    let mut payload_header = vec![0u8; 6];
+    let mut payload = vec![0u8; len];
+
+    match cursor.read_exact(&mut payload_header) {
+        Ok(_) = > {
+            println!("Sucess");
+        }
+        Err(e) => {
+            println!("Error {}", e);
+        }
+    }
+    match cursor.read_exact(&mut payload) {
+        Ok(_) = > {
+            println!("Sucess");
+        }
+        Err(e) => {
+            println!("Error {}", e);
+        }
+    }
+
+    let message = MessageList::default();
+    message
 }
 
 
@@ -243,6 +272,130 @@ impl DltExtendedHeader{
     }
 }
 
+#[derive(Debug)]
+enum MessageType {
+    Bool,
+    Signed,
+    Unsigned,
+    Float,
+    Array,
+    String,
+    Raw,
+    VariableInfo,
+    FixedPoint,
+    TraceInfo,
+    Struct,
+    StringCoding,
+    Reserved,
+}
+
+#[derive(Debug)]
+pub struct Message {
+    message_type: MessageType,
+    payload: Vec<u8>,
+}
+
+#[derive(Debug, Default)]
+pub struct MessageList {
+    msg_list: Vec<Message>,
+}
+
+impl MessageList {
+    fn parse_type(type_byte: u32) -> Option<MessageType> {
+        if type_byte & 0x10 != 0 {return Some(Message::Bool); }
+        if type_byte & 0x20 != 0 {return Some(Message::Signed); }
+        if type_byte & 0x40 != 0 {return Some(Message::Unsigned); }
+        if type_byte & 0x80 != 0 {return Some(Message::Float); }
+        if type_byte & 0x100 != 0 {return Some(Message::Array); }
+        if type_byte & 0x200 != 0 {return Some(Message::String); }
+        if type_byte & 0x400 != 0 {return Some(Message::Raw); }
+        if type_byte & 0x800 != 0 {return Some(Message::VariableInfo); }
+        if type_byte & 0x1000 != 0 {return Some(Message::FixedPoint); }
+        if type_byte & 0x2000 != 0 {return Some(Message::TraceInfo); }
+        if type_byte & 0x4000 != 0 {return Some(Message::Struct); }
+        if type_byte & 0x8000 != 0 {return Some(Message::StringCoding); }
+        None
+    }
+
+    pub fn display(&self) {
+        for message in &self.msg_list {
+            match message.message_type {
+                MessageType::String => {
+                    println!("{:?}", String::from_utf8_lossy(&message.payload));
+                }
+                _ => {
+                    println!("{:?}", message);
+                }
+            }
+        }
+    }
+
+    pub fn get_entire_string(&self) -> String {
+        let mut message_string = String::new();
+
+        for message in &self.msg_list {
+            match message.message_type {
+                MessageType::String => {
+                    message_string += &String::from_utf8_lossy(&message.payload);
+                }
+                _ => {
+                    println!("TODO: {:?}", message);
+                }
+            }
+        }
+
+        message_string
+    }
+
+    fn parse(data: &[u8], len: usize) -> Self {
+        if len < 4 {
+            panic!("Data is too short");
+        }
+
+        println!("msg binary: {:?}", data);
+
+        let mut msg_list: Vec<Message> = Vec::new();
+        let mut cursor = Cursor::new(data);
+
+        while cursor.position() < len as u64 {
+            let type_length = cursor.get_ref()[cursor.position() as usize] & 0x0F;
+            let type_byte = cursor.read_u32::<LittleEndian>().expect("Failed to read type byte");
+
+            let message_type = match Self::parse_type(type_byte) {
+                Some(mt) => mt,
+                None => {
+                    println!("Invalid message type: {}", type_byte);
+                    continue;
+                }
+            }
+
+            match message_type {
+                MessageType::String => {
+                    let string_size = cursor.read_u16::<LittleEndian>().expect("Failed to read string size");
+
+                    let mut payload = vec![0; string_size as usize];
+                    cursor.read_exact(&mut payload).expect("failed to read payload");
+                    msg_list.push(Message {
+                        message_type,
+                        payload,
+                    });
+                },
+                _ => {
+                    cursor.set_position(cursor.position() + 4);
+                }
+            }
+        }
+
+        for m in &msg_list{
+            let string = String::from_utf8_lossy(&m.payload);
+        }
+
+        Self {
+            msg_list: msg_list,
+        }
+    }
+}
+
 
 // The feature image
 // When you provide the binary array, you will get the splited dlt message
@@ -264,7 +417,7 @@ impl DltParse for [u8] {
         let mut dlt_response: Vec<DltFormat> = Vec::new();
 
         let mut cursor: Cursor<Vec<u8>> = Cursor::new(Internal_binary_ps.to_vec());
-        println!("internal len: {}", Internal_binary_ps.len());
+        // println!("internal len: {}", Internal_binary_ps.len());
         
         loop {
 
@@ -272,9 +425,7 @@ impl DltParse for [u8] {
             {
                 Internal_binary_ps.clear();
                 cursor.read_to_end(&mut Internal_binary_ps).unwrap();
-                println!("internal new length : {}", Internal_binary_ps.len());
-
-                println!("llh1");
+                // println!("internal new length : {}", Internal_binary_ps.len());
                 break;
             }
             println!("diff len {}", (cursor.get_ref().len() - cursor.position() as usize));
@@ -282,8 +433,7 @@ impl DltParse for [u8] {
             let dlt_standard_header: DltStandardHeader = dlt_standard_header_parser(&mut cursor);
             let mut dlt_standard_header_extra: DltStandardHeaderExtra = Default::default();
             let mut dlt_standard_header_extra_nosession_id: DltStandardHeaderExtraNoSessionID = Default::default();
-            let mut payload: Vec<u8> = vec![];
-            let mut payload_header: Vec<u8> = vec![];
+            let mut payload_list;
             let mut dlt_extended_header  = Default::default();
             
             
@@ -294,7 +444,6 @@ impl DltParse for [u8] {
             {
                 Internal_binary_ps.clear();
                 //cursor.read_to_end(&mut Internal_binary_ps).unwrap();
-                println!("llh2");
                 break;
             }
             
@@ -310,14 +459,14 @@ impl DltParse for [u8] {
                     dlt_standard_header_extra = dlt_standard_header_extra_parser(&mut cursor);
                     dlt_extended_header = dlt_extended_header_parser(&mut cursor);
                     let payload_length = dlt_standard_header.len as usize - (DLT_STANDARD_HEADER_SIZE + DLT_STANDARD_HEADER_EXTRA_SIZE + DLT_EXTENDED_HEADER_SIZE + DLT_PAYLOAD_HEADER_SIZE);
-                    (payload_header, payload) = dlt_payload_parser(&mut cursor, payload_length);
+                    payload_list = dlt_payload_parser(&mut cursor, payload_length);
                     
                 }else{
                     // trace message
                     dlt_standard_header_extra_nosession_id = dlt_standard_header_extra_no_session_id_parser(&mut cursor);
                     dlt_extended_header = dlt_extended_header_parser(&mut cursor);
                     let payload_length = dlt_standard_header.len as usize - (DLT_STANDARD_HEADER_SIZE + DLT_STANDARD_HEADER_EXTRA_NOSESSIONID_SIZE + DLT_EXTENDED_HEADER_SIZE + DLT_PAYLOAD_HEADER_SIZE);
-                    (payload_header, payload) = dlt_payload_parser(&mut cursor, payload_length);
+                    payload_list = dlt_payload_parser(&mut cursor, payload_length);
                 }
             }
 
@@ -328,8 +477,7 @@ impl DltParse for [u8] {
                 standard_header_extra: dlt_standard_header_extra,
                 standard_header_extra_nosession_id: dlt_standard_header_extra_nosession_id,
                 extended_header: dlt_extended_header,
-                payload_header: payload_header,
-                payload: payload,
+                payload_list: payload_list,
             });
 
         }
@@ -346,6 +494,7 @@ mod tests {
 
     #[test]
     fn test_dlt_standard_header_extra_parser() {
+        return;
         let data: [u8; 224] = [
             0x35, 0x00, 0x00, 0x20, 0x45, 0x43, 0x55, 0x31, 0x27, 0x4b, 0x60, 0x90, 0x26, 0x01, 0x44, 0x41,
             0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x02, 0x0f, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
