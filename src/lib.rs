@@ -1,3 +1,4 @@
+use debug_print::{debug_println};
 use std::io::Cursor;
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use std::io::Read;
@@ -77,6 +78,124 @@ pub struct DltExtendedHeader {
 }
 
 #[derive(Debug)]
+pub enum MstpType {
+    DLT_TYPE_LOG,
+    DLT_TYPE_APP_TRACE,
+    DLT_TYPE_NW_TRACE,
+    DLT_TYPE_CONTROL,
+    Reserved(u8),
+    Invalid(u8),
+}
+
+impl MstpType {
+    pub fn parse(value: u8) -> MstpType {
+        match (value) {
+            0x0 => MstpType::DLT_TYPE_LOG,
+            0x1 => MstpType::DLT_TYPE_APP_TRACE,
+            0x2 => MstpType::DLT_TYPE_NW_TRACE,
+            0x3 => MstpType::DLT_TYPE_CONTROL,
+            0x4..7 => MstpType::Reserved(value),
+            _ => MstpType::Invalid(value),
+        }
+    }
+}
+
+impl fmt::Display for MstpType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MstpType::DLT_TYPE_LOG => write!(f, "DLT_TYPE_LOG"),
+            MstpType::DLT_TYPE_APP_TRACE => write!(f, "DLT_TYPE_APP_TRACE"),
+            MstpType::DLT_TYPE_NW_TRACE => write!(f, "DLT_TYPE_NW_TRACE"),
+            MstpType::DLT_TYPE_CONTROL => write!(f, "DLT_TYPE_CONTROL"),
+            MstpType::Reserved(val) => write!(f, "Reserved({})", val),
+            MstpType::Invalid(val) => write!(f, "Invalid({})", val),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Mtin {
+    Log(MtinType_DLT_LOG),
+    AppTrace(MtinType_DLT_APP_TRACE),
+    NwTrace(MtinType_DLT_NW_TRACE),
+    Control(MtinType_DLT_CONTROL),
+    Invalid,
+}
+
+
+#[derive(Debug)]
+pub enum MtinType_DLT_LOG{
+    DLT_LOG_FATAL,
+    DLT_LOG_ERROR,
+    DLT_LOG_WARN,
+    DLT_LOG_INFO,
+    DLT_LOG_DEBUG,
+    DLT_LOG_VERBOSE,
+    Reserved(u8),
+    Invalid(u8),
+}
+
+#[derive(Debug)]
+pub enum MtinType_DLT_APP_TRACE {
+    DLT_TRACE_VARIABLE,
+    Reserved(u8),
+    Invalid(u8),
+}
+
+#[derive(Debug)]
+pub enum MtinType_DLT_NW_TRACE {
+    DLT_TRACE_VARIABLE,
+    Reserved(u8),
+    Invalid(u8),
+}
+
+#[derive(Debug)]
+pub enum MtinType_DLT_CONTROL {
+    DLT_CONTROL_REQUEST,
+    DLT_CONTROL_RESPONSE,
+    Reserved(u8),
+    Invalid(u8),
+}
+
+impl MtinType_DLT_LOG {
+    pub fn parse(value: u8) -> MtinType_DLT_LOG {
+        match (value) {
+            0x0 => MtinType_DLT_LOG::DLT_LOG_FATAL,
+            0x1 => MtinType_DLT_LOG::DLT_LOG_ERROR,
+            0x2 => MtinType_DLT_LOG::DLT_LOG_WARN,
+            0x3 => MtinType_DLT_LOG::DLT_LOG_INFO,
+            0x4 => MtinType_DLT_LOG::DLT_LOG_DEBUG,
+            0x5 => MtinType_DLT_LOG::DLT_LOG_VERBOSE,
+            0x6.. 0x7 => MtinType_DLT_LOG::Reserved(value),
+            _ => MtinType_DLT_LOG::Invalid(value),
+        }
+    }
+}
+
+impl MtinType_DLT_APP_TRACE {
+    pub fn parse(value: u8) -> MtinType_DLT_APP_TRACE {
+        MtinType_DLT_APP_TRACE::Invalid(value)
+    }
+}
+
+impl MtinType_DLT_NW_TRACE {
+    pub fn parse(value: u8) -> MtinType_DLT_NW_TRACE {
+        MtinType_DLT_NW_TRACE::Invalid(value)
+    }
+}
+
+impl MtinType_DLT_CONTROL {
+    pub fn parse(value: u8) -> MtinType_DLT_CONTROL {
+        match (value) {
+            0x1 => MtinType_DLT_CONTROL::DLT_CONTROL_REQUEST,
+            0x2 => MtinType_DLT_CONTROL::DLT_CONTROL_RESPONSE,
+            0x3.. 0x7 => MtinType_DLT_CONTROL::Reserved(value),
+            _ => MtinType_DLT_CONTROL::Invalid(value),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct DltFormat{
     pub standard_header: DltStandardHeader,
     pub standard_header_extra: DltStandardHeaderExtra,
@@ -137,7 +256,7 @@ fn dlt_payload_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> MessageList {
     match cursor.read_exact(&mut payload_header) {
         Ok(_) => {
             // Successfully read payload_header and payload
-            println!("Successfully read payload_header and payload");
+            debug_println!("Successfully read payload_header and payload");
         }
         Err(e) => {
             // Handle error for reading payload
@@ -148,7 +267,7 @@ fn dlt_payload_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> MessageList {
     match cursor.read_exact(&mut payload) {
         Ok(_) => {
             // Successfully read payload_header and payload
-            println!("Successfully read payload_header and payload");
+            debug_println!("Successfully read payload_header and payload");
         }
         Err(e) => {
             // Handle error for reading payload
@@ -270,6 +389,24 @@ impl DltExtendedHeader{
             Err(e) => e.to_string(),
         }
     }
+
+    pub fn parse(&self) -> (u8, MstpType, Mtin) {
+        let byte = &self.msin;
+        let verb = byte & 0b00000001;               // Extract bit 0
+        let mstp_val = (byte & 0b00001110) >> 1;        // Extract bits 1–3
+        let mtin_val = (byte & 0b11110000) >> 4;        // Extract bits 4–7
+
+        let mstp = MstpType::parse(mstp_val);
+        let mtin = match mstp {
+            MstpType::DLT_TYPE_LOG => Mtin::Log(MtinType_DLT_LOG::parse(mtin_val)),
+            MstpType::DLT_TYPE_APP_TRACE => Mtin::AppTrace(MtinType_DLT_APP_TRACE::parse(mtin_val)),
+            MstpType::DLT_TYPE_NW_TRACE => Mtin::NwTrace(MtinType_DLT_NW_TRACE::parse(mtin_val)),
+            MstpType::DLT_TYPE_CONTROL => Mtin::Control(MtinType_DLT_CONTROL::parse(mtin_val)),
+            _ => Mtin::Invalid,
+        };
+
+        (verb, mstp, mtin)
+    }
 }
 
 #[derive(Debug)]
@@ -352,8 +489,6 @@ impl MessageList {
             panic!("Data is too short");
         }
 
-        println!("msg binary: {:?}", data);
-
         let mut msg_list: Vec<Message> = Vec::new();
         let mut cursor = Cursor::new(data);
 
@@ -428,17 +563,12 @@ impl DltParse for [u8] {
                 // println!("internal new length : {}", Internal_binary_ps.len());
                 break;
             }
-            println!("diff len {}", (cursor.get_ref().len() - cursor.position() as usize));
 
             let dlt_standard_header: DltStandardHeader = dlt_standard_header_parser(&mut cursor);
             let mut dlt_standard_header_extra: DltStandardHeaderExtra = Default::default();
             let mut dlt_standard_header_extra_nosession_id: DltStandardHeaderExtraNoSessionID = Default::default();
             let mut payload_list;
             let mut dlt_extended_header  = Default::default();
-            
-            
-            println!("dlt len: {}", dlt_standard_header.len);
-            println!("{:?}", dlt_standard_header);
 
             if (dlt_standard_header.len as usize) < DLT_STANDARD_HEADER_SIZE
             {
@@ -450,7 +580,6 @@ impl DltParse for [u8] {
 
             if (cursor.get_ref().len() - cursor.position() as usize) < (dlt_standard_header.len as usize - DLT_STANDARD_HEADER_SIZE)
             {
-                println!("llh3");
                 break;
             }else{
                 if dlt_standard_header.get_htyp().WSID
@@ -469,8 +598,6 @@ impl DltParse for [u8] {
                     payload_list = dlt_payload_parser(&mut cursor, payload_length);
                 }
             }
-
-            println!("{:?}", dlt_extended_header);
 
             dlt_response.push(DltFormat{
                 standard_header: dlt_standard_header,
