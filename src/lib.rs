@@ -51,9 +51,9 @@ pub struct DltHTYP {
 
 #[derive(Debug, PartialEq, Default)]
 pub struct DltStandardHeader {
-    htyp:   u8,
-    mcnt:   u8,
-    len:    u16,
+    pub htyp:   u8,
+    pub mcnt:   u8,
+    pub len:    u16,
 }
 
 #[derive(Debug, PartialEq, Default)]
@@ -71,10 +71,15 @@ pub struct DltStandardHeaderExtraNoSessionID {
 
 #[derive(Debug, PartialEq, Default)]
 pub struct DltExtendedHeader {
-    msin: u8,
-    noar: u8,
-    apid: [u8; DLT_ID_SIZE],
-    ctid: [u8; DLT_ID_SIZE],
+    pub msin: u8,
+    pub noar: u8,
+    pub apid: [u8; DLT_ID_SIZE],
+    pub ctid: [u8; DLT_ID_SIZE],
+}
+
+#[derive(Debug)]
+pub struct DltServiceMsg {
+    pub service_cmd: u32
 }
 
 #[derive(Debug)]
@@ -347,6 +352,16 @@ impl DltStandardHeader {
         DltHTYP { UEH, MSBF, WEID, WSID, WTMS, VERS }
     }
 
+    pub fn generate_packet(&self) -> Vec<u8> {
+        let mut packet = Vec::new();
+
+        packet.extend(&self.htyp.to_le_bytes());
+        packet.extend(&self.mcnt.to_le_bytes());
+        packet.extend(&self.len.to_le_bytes());
+
+        packet
+    }
+
     pub fn get_version(&self) -> u8 {
         let VERS: u8 = (self.htyp & VERS_MASK) >> 5;
         VERS
@@ -363,6 +378,17 @@ impl DltStandardHeaderExtra {
 
     pub fn get_timestamp(&self) -> u32{
         self.tmsp
+    }
+
+    // TODO: make switch for parameters
+    pub fn generate_packet(&self) -> Vec<u8> {
+        let mut packet = Vec::new();
+
+        packet.extend_from_slice(&self.ecu);
+        packet.extend(&self.seid.to_le_bytes());
+        packet.extend(&self.tmsp.to_le_bytes());
+
+        packet
     }
 
     pub fn debug_print(&self){
@@ -388,6 +414,18 @@ impl DltExtendedHeader{
             Ok(str) => str.to_string(),
             Err(e) => e.to_string(),
         }
+    }
+
+    // TODO: make switch for parameters
+    pub fn generate_packet(&self) -> Vec<u8> {
+        let mut packet = Vec::new();
+
+        packet.extend(&self.msin.to_le_bytes());
+        packet.extend(&self.noar.to_le_bytes());
+        packet.extend_from_slice(&self.apid);
+        packet.extend_from_slice(&self.ctid);
+
+        packet
     }
 
     pub fn parse(&self) -> (u8, MstpType, Mtin) {
@@ -596,6 +634,9 @@ impl DltParse for [u8] {
                     dlt_extended_header = dlt_extended_header_parser(&mut cursor);
                     let payload_length = dlt_standard_header.len as usize - (DLT_STANDARD_HEADER_SIZE + DLT_STANDARD_HEADER_EXTRA_NOSESSIONID_SIZE + DLT_EXTENDED_HEADER_SIZE + DLT_PAYLOAD_HEADER_SIZE);
                     payload_list = dlt_payload_parser(&mut cursor, payload_length);
+                    let mut tmp_vec = vec![0u8; payload_length];
+                    cursor.read_exact(&mut tmp_vec);
+                    println!("{:?}", tmp_vec);
                 }
             }
 
