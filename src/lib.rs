@@ -21,22 +21,6 @@ const WSID_MASK: u8 = 0x08; // Bit 3: With Session ID
 const WTMS_MASK: u8 = 0x10; // Bit 4: With Timestamp
 const VERS_MASK: u8 = 0xE0; // Bit 5-7: Version Number (11100000)
 
-static Internal_binary: Mutex<Vec<u8>> = Mutex::new(Vec::new());
-
-pub enum DLTMessageType {
-    LOG,
-    CONTROL,
-}
-
-impl fmt::Display for DLTMessageType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            DLTMessageType::LOG => write!(f, "DLTMessageType::LOG"),
-            DLTMessageType::CONTROL => write!(f, "DLTMessageType::CONTROL"),
-        }
-    }
-}
-
 
 #[derive(Debug, PartialEq)]
 pub struct DltHTYP {
@@ -60,12 +44,6 @@ pub struct DltStandardHeader {
 pub struct DltStandardHeaderExtra {
     ecu: [u8; DLT_ID_SIZE],
     seid: u32,
-    tmsp: u32,
-}
-
-#[derive(Debug, PartialEq, Default)]
-pub struct DltStandardHeaderExtraNoSessionID {
-    ecu: [u8; DLT_ID_SIZE],
     tmsp: u32,
 }
 
@@ -204,7 +182,6 @@ impl MtinType_DLT_CONTROL {
 pub struct DltFormat{
     pub standard_header: DltStandardHeader,
     pub standard_header_extra: DltStandardHeaderExtra,
-    pub standard_header_extra_nosession_id: DltStandardHeaderExtraNoSessionID,
     pub extended_header: DltExtendedHeader,
     pub payload_list: MessageList,
 }
@@ -219,28 +196,31 @@ fn dlt_standard_header_parser(cursor: &mut Cursor<Vec<u8>>) -> DltStandardHeader
     DltStandardHeader { htyp, mcnt, len }
 }
 
-fn dlt_standard_header_extra_parser(cursor: &mut Cursor<Vec<u8>>) -> DltStandardHeaderExtra {
-    //let mut cursor = Cursor::new(data);
-
+fn dlt_standard_header_extra_parser(htyp: &DltHTYP, cursor: &mut Cursor<Vec<u8>>) -> DltStandardHeaderExtra {
     let mut ecu = [0u8; DLT_ID_SIZE];
-    cursor.read_exact(&mut ecu).unwrap();
-    let seid = cursor.read_u32::<BigEndian>().unwrap();
-    let tmsp = cursor.read_u32::<BigEndian>().unwrap();
+    let mut seid: u32 = 0;
+    let mut tmsp: u32 = 0;
+
+    if htyp.WEID {
+        cursor.read_exact(&mut ecu).unwrap();
+    }
+
+    if htyp.WSID {
+        seid = cursor.read_u32::<BigEndian>().unwrap();
+    }
+
+    if htyp.WTMS {
+        tmsp = cursor.read_u32::<BigEndian>().unwrap();
+    }
 
     DltStandardHeaderExtra { ecu, seid, tmsp }
 }
 
-fn dlt_standard_header_extra_no_session_id_parser(cursor: &mut Cursor<Vec<u8>>) -> DltStandardHeaderExtraNoSessionID {
-    //let mut cursor = Cursor::new(data);
+fn dlt_extended_header_parser(htyp: &DltHTYP , cursor: &mut Cursor<Vec<u8>>) -> DltExtendedHeader {
+    if !htyp.UEH {
+        return DltExtendedHeader::default();
+    }
 
-    let mut ecu = [0u8; DLT_ID_SIZE];
-    cursor.read_exact(&mut ecu).unwrap();
-    let tmsp = cursor.read_u32::<BigEndian>().unwrap();
-
-    DltStandardHeaderExtraNoSessionID { ecu, tmsp }
-}
-
-fn dlt_extended_header_parser(cursor: &mut Cursor<Vec<u8>>) -> DltExtendedHeader {
     let msin = cursor.read_u8().unwrap();
     let noar = cursor.read_u8().unwrap();
     let mut apid = [0u8; DLT_ID_SIZE];
@@ -249,43 +229,6 @@ fn dlt_extended_header_parser(cursor: &mut Cursor<Vec<u8>>) -> DltExtendedHeader
     cursor.read_exact(&mut ctid).unwrap();
 
     DltExtendedHeader { msin, noar, apid, ctid }
-}
-
-fn dlt_payload_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> MessageList {
-    let mut payload_header = vec![0u8; 6];
-    let mut payload = vec![0u8; len];
-
-    // cursor.read_exact(&mut payload_header).unwrap();
-    // cursor.read_exact(&mut payload).unwrap();
-
-    match cursor.read_exact(&mut payload_header) {
-        Ok(_) => {
-            // Successfully read payload_header and payload
-            debug_println!("Successfully read payload_header and payload");
-        }
-        Err(e) => {
-            // Handle error for reading payload
-            println!("Error reading payload: {}", e);
-        }
-    }
-
-    match cursor.read_exact(&mut payload) {
-        Ok(_) => {
-            // Successfully read payload_header and payload
-            debug_println!("Successfully read payload_header and payload");
-        }
-        Err(e) => {
-            // Handle error for reading payload
-            println!("Error reading payload: {}", e);
-        }
-    }
-
-    let mut array: Vec<u8> = Vec::new();
-    array.extend_from_slice(&payload_header);
-    array.extend_from_slice(&payload);
-    let message = MessageList::parse(&array, len);
-
-    (message)
 }
 
 fn dlt_service_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> MessageList {
@@ -313,31 +256,32 @@ fn dlt_service_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> MessageList {
     message
 }
 
+fn dlt_standard_header_size() -> usize {
+    DLT_STANDARD_HEADER_SIZE
+}
 
+fn dlt_standard_header_extra_size(htyp: &DltHTYP) -> usize {
+    let mut size = 0;
 
-// { UEH: true, MSBF: false, WEID: true, WSID: true, WTMS: true, VERS: 1 }
-// -> 0x3d '=' -> control message
-// DltHTYP { UEH: true, MSBF: false, WEID: true, WSID: true, WTMS: true, VERS: 1 }
-// -> 0x35 '5' -> log message 
-pub fn dlt_analyze(x : &DltStandardHeader) -> DLTMessageType
-{
-    let mut ret = DLTMessageType::LOG;
-    if x.get_htyp().UEH == true && x.get_htyp().MSBF == false
-                                && x.get_htyp().WEID == true 
-                                && x.get_htyp().WSID == true
-                                && x.get_htyp().WTMS == true
-                                && x.get_version() == 1
-                                {
-        ret = DLTMessageType::LOG;
-    }else if x.get_htyp().UEH == true && x.get_htyp().MSBF == false
-                                      && x.get_htyp().WEID == true 
-                                      && x.get_htyp().WSID == false
-                                      && x.get_htyp().WTMS == true
-                                      && x.get_version() == 1
-                                      {
-        ret = DLTMessageType::CONTROL;
+    if htyp.WEID {
+        size += DLT_ID_SIZE;
     }
-    ret
+    if htyp.WSID {
+        size += 4;
+    }
+    if htyp.WTMS {
+        size += 4;
+    }
+
+    size
+}
+
+fn dlt_extended_header_size(htyp: &DltHTYP) -> usize {
+    if !htyp.UEH {
+        0
+    } else {
+        DLT_EXTENDED_HEADER_SIZE
+    }
 }
 
 impl DltStandardHeader {
@@ -524,29 +468,131 @@ impl MessageList {
 
     fn parse(data: &[u8], len: usize) -> Self {
         if len < 4 {
-            panic!("Data is too short");
+            println!("Data is too short: {} bytes", len);
+            return Self::default();
         }
 
         let mut msg_list: Vec<Message> = Vec::new();
-        let mut cursor = Cursor::new(data);
+        let mut cursor = Cursor::new(data.to_vec());
+
+        println!("Starting to parse payload of {} bytes", len);
 
         while cursor.position() < len as u64 {
-            let type_length = cursor.get_ref()[cursor.position() as usize] & 0x0F;
+            println!("Current position: {}, remaining: {}", cursor.position(), len as u64 - cursor.position());
+            
+            // FIXED: Read the type info correctly
+            if cursor.position() + 4 > len as u64 {
+                println!("Not enough bytes for type header");
+                break;
+            }
+            
             let type_byte = cursor.read_u32::<LittleEndian>().expect("Failed to read type byte");
+            println!("Type byte: 0x{:08X}", type_byte);
+
+            // FIXED: Extract type length from the first byte
+            let type_length = (type_byte & 0x0F) as u8;
+            println!("Type length field: {}", type_length);
 
             let message_type = match Self::parse_type(type_byte) {
                 Some(mt) => mt,
                 None => {
-                    println!("Invalid message type: {}", type_byte);
-                    continue;
+                    println!("Invalid message type: 0x{:08X}", type_byte);
+                    break;
                 }
             };
 
+            println!("Detected message type: {:?}", message_type);
+
             match message_type {
+                MessageType::Bool => {
+                    // FIXED: Use appropriate size calculation
+                    let bool_size = if type_length > 0 { type_length as usize } else { 1 };
+                    
+                    if cursor.position() + bool_size as u64 > len as u64 {
+                        println!("Not enough bytes for bool payload");
+                        break;
+                    }
+
+                    let mut payload = vec![0; bool_size];
+                    cursor.read_exact(&mut payload).expect("failed to read payload");
+                    msg_list.push(Message {
+                        message_type,
+                        payload,
+                    });
+                },
                 MessageType::String => {
+                    // FIXED: Check if we have bytes for string length
+                    if cursor.position() + 2 > len as u64 {
+                        println!("Not enough bytes for string length");
+                        break;
+                    }
+                    
                     let string_size = cursor.read_u16::<LittleEndian>().expect("Failed to read string size");
+                    println!("String size: {}", string_size);
+
+                    if cursor.position() + string_size as u64 > len as u64 {
+                        println!("Not enough bytes for string content: need {}, have {}", 
+                                string_size, len as u64 - cursor.position());
+                        break;
+                    }
 
                     let mut payload = vec![0; string_size as usize];
+                    cursor.read_exact(&mut payload).expect("failed to read payload");
+                    
+                    // Remove null terminator if present
+                    if let Some(&0) = payload.last() {
+                        payload.pop();
+                    }
+                    
+                    msg_list.push(Message {
+                        message_type,
+                        payload,
+                    });
+                },
+                MessageType::Signed => {
+                    // FIXED: Handle signed integers based on type_length
+                    let size = match type_length {
+                        1 => 1, // 8-bit
+                        2 => 2, // 16-bit  
+                        3 => 4, // 32-bit
+                        4 => 8, // 64-bit
+                        _ => {
+                            println!("Invalid signed integer size: {}", type_length);
+                            break;
+                        }
+                    };
+                    
+                    if cursor.position() + size as u64 > len as u64 {
+                        println!("Not enough bytes for signed integer");
+                        break;
+                    }
+                    
+                    let mut payload = vec![0; size];
+                    cursor.read_exact(&mut payload).expect("failed to read payload");
+                    msg_list.push(Message {
+                        message_type,
+                        payload,
+                    });
+                },
+                MessageType::Unsigned => {
+                    // FIXED: Handle unsigned integers based on type_length
+                    let size = match type_length {
+                        1 => 1, // 8-bit
+                        2 => 2, // 16-bit
+                        3 => 4, // 32-bit  
+                        4 => 8, // 64-bit
+                        _ => {
+                            println!("Invalid unsigned integer size: {}", type_length);
+                            break;
+                        }
+                    };
+                    
+                    if cursor.position() + size as u64 > len as u64 {
+                        println!("Not enough bytes for unsigned integer");
+                        break;
+                    }
+                    
+                    let mut payload = vec![0; size];
                     cursor.read_exact(&mut payload).expect("failed to read payload");
                     msg_list.push(Message {
                         message_type,
@@ -554,104 +600,122 @@ impl MessageList {
                     });
                 },
                 _ => {
-                    cursor.set_position(cursor.position() + 4);
+                    println!("Unsupported message type: {:?}", message_type);
+                    break;
                 }
             }
         }
 
-        for m in &msg_list{
-            let string = String::from_utf8_lossy(&m.payload);
-        }
+        println!("Parsed {} messages", msg_list.len());
 
         Self {
-            msg_list: msg_list,
+            msg_list,
         }
     }
 }
 
-
-// The feature image
-// When you provide the binary array, you will get the splited dlt message
-//  
-// 
-
-
 pub trait DltParse {
-    fn dlt_parse(&self) -> Vec<DltFormat>;
+    fn dlt_parse(&self) -> (Vec<DltFormat>, Vec<u8>);
 }
 
 impl DltParse for [u8] {
-    fn dlt_parse(&self) -> Vec<DltFormat> {
-        
-        
-        let mut Internal_binary_ps = Internal_binary.lock().unwrap();
-        Internal_binary_ps.extend(self);
-
+    fn dlt_parse(&self) -> (Vec<DltFormat>, Vec<u8>) {
+        let mut remaining_data = Vec::new();
         let mut dlt_response: Vec<DltFormat> = Vec::new();
-
-        let mut cursor: Cursor<Vec<u8>> = Cursor::new(Internal_binary_ps.to_vec());
-        // println!("internal len: {}", Internal_binary_ps.len());
+        let mut cursor: Cursor<Vec<u8>> = Cursor::new(self.to_vec());
         
         loop {
-
-            if  (cursor.get_ref().len() - cursor.position() as usize) < (DLT_STANDARD_HEADER_SIZE + DLT_STANDARD_HEADER_EXTRA_SIZE)
-            {
-                Internal_binary_ps.clear();
-                cursor.read_to_end(&mut Internal_binary_ps).unwrap();
-                // println!("internal new length : {}", Internal_binary_ps.len());
+            let remaining_bytes = cursor.get_ref().len() - cursor.position() as usize;
+            println!("Remaining bytes: {}", remaining_bytes);
+            let message_start_pos = cursor.position();
+            
+            // Check if we have enough data for at least a standard header
+            if remaining_bytes < DLT_STANDARD_HEADER_SIZE {
+                cursor.read_to_end(&mut remaining_data).unwrap();
                 break;
             }
 
+            // Parse standard header
             let dlt_standard_header: DltStandardHeader = dlt_standard_header_parser(&mut cursor);
-            let mut dlt_standard_header_extra: DltStandardHeaderExtra = Default::default();
-            let mut dlt_standard_header_extra_nosession_id: DltStandardHeaderExtraNoSessionID = Default::default();
-            let mut payload_list;
-            let mut dlt_extended_header  = Default::default();
 
-            if (dlt_standard_header.len as usize) < DLT_STANDARD_HEADER_SIZE
-            {
-                Internal_binary_ps.clear();
-                //cursor.read_to_end(&mut Internal_binary_ps).unwrap();
+            // Check if we have the complete message
+            println!("Standard Header Length: {}", dlt_standard_header.len);
+            if dlt_standard_header.len < DLT_STANDARD_HEADER_SIZE as u16 {
+                let mut remaining_data = Vec::new();
+                cursor.set_position(cursor.position() - DLT_STANDARD_HEADER_SIZE as u64);
+                cursor.read_to_end(&mut remaining_data).unwrap();
                 break;
+            }
+
+            let message_remaining = dlt_standard_header.len as usize - DLT_STANDARD_HEADER_SIZE;
+            let current_remaining = cursor.get_ref().len() - cursor.position() as usize;
+            
+            if current_remaining < message_remaining {
+                let mut remaining_data = Vec::new();
+                cursor.set_position(cursor.position() - DLT_STANDARD_HEADER_SIZE as u64);
+                cursor.read_to_end(&mut remaining_data).unwrap();
+                break;
+            }
+
+            // Parse headers
+            let htyp = dlt_standard_header.get_htyp();
+            let dlt_standard_header_extra: DltStandardHeaderExtra = 
+                dlt_standard_header_extra_parser(&htyp, &mut cursor);
+            let dlt_extended_header: DltExtendedHeader = 
+                dlt_extended_header_parser(&htyp, &mut cursor);
+            let mut payload_list: MessageList = MessageList::default();
+
+            let mtin_type = dlt_extended_header.parse().2;
+            match mtin_type {
+                Mtin::Log(_) => {
+                    println!("Log Message");
+                    
+                    // FIXED: Calculate correct payload position and length
+                    let headers_size = dlt_standard_header_size() +
+                                     dlt_standard_header_extra_size(&htyp) +
+                                     dlt_extended_header_size(&htyp);
+                    
+                    let payload_start = message_start_pos as usize + headers_size;
+                    let payload_length = dlt_standard_header.len as usize - headers_size;
+                    
+                    println!("Headers size: {}, Payload start: {}, Payload length: {}", 
+                             headers_size, payload_start, payload_length);
+                    
+                    if payload_length > 0 && payload_start + payload_length <= cursor.get_ref().len() {
+                        let payload_bytes = &cursor.get_ref()[payload_start..payload_start + payload_length];
+                        println!("Payload bytes: {:?}", payload_bytes);
+                        payload_list = MessageList::parse(payload_bytes, payload_length);
+                    }
+                    
+                    // Set cursor to end of message
+                    cursor.set_position(message_start_pos + dlt_standard_header.len as u64);
+                },
+                Mtin::Control(_) => {
+                    println!("Control Message");
+                    cursor.set_position(message_start_pos + dlt_standard_header.len as u64);
+                },
+                _ => {
+                    println!("Other message type");
+                    cursor.set_position(message_start_pos + dlt_standard_header.len as u64);
+                },
             }
             
-
-            if (cursor.get_ref().len() - cursor.position() as usize) < (dlt_standard_header.len as usize - DLT_STANDARD_HEADER_SIZE)
-            {
-                break;
-            }else{
-                if dlt_standard_header.get_htyp().WSID
-                {
-                    // log message
-                    dlt_standard_header_extra = dlt_standard_header_extra_parser(&mut cursor);
-                    dlt_extended_header = dlt_extended_header_parser(&mut cursor);
-                    let payload_length = dlt_standard_header.len as usize - (DLT_STANDARD_HEADER_SIZE + DLT_STANDARD_HEADER_EXTRA_SIZE + DLT_EXTENDED_HEADER_SIZE + DLT_PAYLOAD_HEADER_SIZE);
-                    payload_list = dlt_payload_parser(&mut cursor, payload_length);
-                    
-                }else{
-                    // trace message
-                    dlt_standard_header_extra_nosession_id = dlt_standard_header_extra_no_session_id_parser(&mut cursor);
-                    dlt_extended_header = dlt_extended_header_parser(&mut cursor);
-                    let payload_length = dlt_standard_header.len as usize - (DLT_STANDARD_HEADER_SIZE + DLT_STANDARD_HEADER_EXTRA_NOSESSIONID_SIZE + DLT_EXTENDED_HEADER_SIZE + DLT_PAYLOAD_HEADER_SIZE);
-                    payload_list = dlt_payload_parser(&mut cursor, payload_length);
-                    let mut tmp_vec = vec![0u8; payload_length];
-                    cursor.read_exact(&mut tmp_vec);
-                    println!("{:?}", tmp_vec);
-                }
-            }
-
-            dlt_response.push(DltFormat{
+            // Add parsed message to response
+            dlt_response.push(DltFormat {
                 standard_header: dlt_standard_header,
                 standard_header_extra: dlt_standard_header_extra,
-                standard_header_extra_nosession_id: dlt_standard_header_extra_nosession_id,
                 extended_header: dlt_extended_header,
                 payload_list: payload_list,
             });
 
+            // Check if we've processed all data
+            if cursor.position() >= cursor.get_ref().len() as u64 {
+                println!("All data processed");
+                break;
+            }
         }
 
-        dlt_response
-        
+        (dlt_response, remaining_data)
     }
 }
 
@@ -662,32 +726,19 @@ mod tests {
 
     #[test]
     fn test_dlt_standard_header_extra_parser() {
-        return;
-        let data: [u8; 224] = [
-            0x35, 0x00, 0x00, 0x20, 0x45, 0x43, 0x55, 0x31, 0x27, 0x4b, 0x60, 0x90, 0x26, 0x01, 0x44, 0x41,
-            0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x02, 0x0f, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
-            0x35, 0x00, 0x00, 0x20, 0x45, 0x43, 0x55, 0x31, 0x27, 0x4b, 0x30, 0x45, 0x26, 0x01, 0x44, 0x41,
-            0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x02, 0x0f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
-            0x3d, 0x0e, 0x00, 0x4f, 0x45, 0x43, 0x55, 0x31, 0x00, 0x00, 0x65, 0x84, 0x27, 0x4b, 0x30, 0x45,
-            0x41, 0x01, 0x44, 0x4c, 0x54, 0x44, 0x49, 0x4e, 0x54, 0x4d, 0x00, 0x02, 0x00, 0x00, 0x2f, 0x00,
-            0x43, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x20, 0x63, 0x6f, 0x6e, 0x6e, 0x65, 0x63, 0x74, 0x69, 0x6f,
-            0x6e, 0x20, 0x23, 0x37, 0x20, 0x63, 0x6c, 0x6f, 0x73, 0x65, 0x64, 0x2e, 0x20, 0x54, 0x6f, 0x74,
-            0x61, 0x6c, 0x20, 0x43, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x73, 0x20, 0x3a, 0x20, 0x30, 0x00, 0x3d,
-            0x0f, 0x00, 0x58, 0x45, 0x43, 0x55, 0x31, 0x00, 0x00, 0x65, 0x84, 0x27, 0x4b, 0x60, 0x91, 0x41,
-            0x01, 0x44, 0x4c, 0x54, 0x44, 0x49, 0x4e, 0x54, 0x4d, 0x00, 0x02, 0x00, 0x00, 0x38, 0x00, 0x4e,
-            0x65, 0x77, 0x20, 0x63, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x20, 0x63, 0x6f, 0x6e, 0x6e, 0x65, 0x63,
-            0x74, 0x69, 0x6f, 0x6e, 0x20, 0x23, 0x37, 0x20, 0x65, 0x73, 0x74, 0x61, 0x62, 0x6c, 0x69, 0x73,
-            0x68, 0x65, 0x64, 0x2c, 0x20, 0x54, 0x6f, 0x74, 0x61, 0x6c, 0x20, 0x43, 0x6c, 0x69, 0x65, 0x6e,
+        let data: [u8; _] = [
+            0x35, 0x00, 0x00, 0x20, 0x45, 0x43, 0x55, 0x31, 0x82, 0x72, 0xD9, 0x99, 0x26, 0x01, 0x44, 0x41, 0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x02, 0x0F, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x35, 0x00, 0x00, 0x20, 0x45, 0x43, 0x55, 0x31, 0x82, 0x70, 0x6C, 0xAB, 0x26, 0x01, 0x44, 0x41, 0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x02, 0x0F, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x3D, 0x0E, 0x00, 0x4F, 0x45, 0x43, 0x55, 0x31, 0x00, 0x02, 0x57, 0x67, 0x82, 0x70, 0x6C, 0xAB, 0x41, 0x01, 0x44, 0x4C, 0x54, 0x44, 0x49, 0x4E, 0x54, 0x4D, 0x00, 0x02, 0x00, 0x00, 0x2F, 0x00, 0x43, 0x6C, 0x69, 0x65, 0x6E, 0x74, 0x20, 0x63, 0x6F, 0x6E, 0x6E, 0x65, 0x63, 0x74, 0x69, 0x6F, 0x6E, 0x20, 0x23, 0x37, 0x20, 0x63, 0x6C, 0x6F, 0x73, 0x65, 0x64, 0x2E, 0x20, 0x54, 0x6F, 0x74, 0x61, 0x6C, 0x20, 0x43, 0x6C, 0x69, 0x65, 0x6E, 0x74, 0x73, 0x20, 0x3A, 0x20, 0x30, 0x00, 0x3D, 0x0F, 0x00, 0x58, 0x45, 0x43, 0x55, 0x31, 0x00, 0x02, 0x57, 0x67, 0x82, 0x72, 0xD9, 0x9B, 0x41, 0x01, 0x44, 0x4C, 0x54, 0x44, 0x49, 0x4E, 0x54, 0x4D, 0x00, 0x02, 0x00, 0x00, 0x38, 0x00, 0x4E, 0x65, 0x77, 0x20, 0x63, 0x6C, 0x69, 0x65, 0x6E, 0x74, 0x20, 0x63, 0x6F, 0x6E, 0x6E, 0x65, 0x63, 0x74, 0x69, 0x6F, 0x6E, 0x20, 0x23, 0x37, 0x20, 0x65, 0x73, 0x74, 0x61, 0x62, 0x6C, 0x69, 0x73, 0x68, 0x65, 0x64, 0x2C, 0x20, 0x54, 0x6F, 0x74, 0x61, 0x6C, 0x20, 0x43, 0x6C, 0x69, 0x65, 0x6E, 0x74, 0x73, 0x20, 0x3A, 0x20, 0x31, 0x00,
+            0x35, 0x00, 0x00, 0x20, 0x45, 0x43, 0x55, 0x31, 0x84, 0xE0, 0xE6, 0x1A, 0x26, 0x01, 0x44, 0x41, 0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x02, 0x0F, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x35, 0x00, 0x00, 0x20, 0x45, 0x43, 0x55, 0x31, 0x84, 0xD8, 0x90, 0x13, 0x26, 0x01, 0x44, 0x41, 0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x02, 0x0F, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x3D, 0x36, 0x00, 0x4F, 0x45, 0x43, 0x55, 0x31, 0x00, 0x02, 0x57, 0x67, 0x84, 0xD8, 0x90, 0x13, 0x41, 0x01, 0x44, 0x4C, 0x54, 0x44, 0x49, 0x4E, 0x54, 0x4D, 0x00, 0x02, 0x00, 0x00, 0x2F, 0x00, 0x43, 0x6C, 0x69, 0x65, 0x6E, 0x74, 0x20, 0x63, 0x6F, 0x6E, 0x6E, 0x65, 0x63, 0x74, 0x69, 0x6F, 0x6E, 0x20, 0x23, 0x37, 0x20, 0x63, 0x6C, 0x6F, 0x73, 0x65, 0x64, 0x2E, 0x20, 0x54, 0x6F, 0x74, 0x61, 0x6C, 0x20, 0x43, 0x6C, 0x69, 0x65, 0x6E, 0x74, 0x73, 0x20, 0x3A, 0x20, 0x30, 0x00, 0x3D, 0x37, 0x00, 0x58, 0x45, 0x43, 0x55, 0x31, 0x00, 0x02, 0x57, 0x67, 0x84, 0xE0, 0xE6, 0x1A, 0x41, 0x01, 0x44, 0x4C, 0x54, 0x44, 0x49, 0x4E, 0x54, 0x4D, 0x00, 0x02, 0x00, 0x00, 0x38, 0x00, 0x4E, 0x65, 0x77, 0x20, 0x63, 0x6C, 0x69, 0x65, 0x6E, 0x74, 0x20, 0x63, 0x6F, 0x6E, 0x6E, 0x65, 0x63, 0x74, 0x69, 0x6F, 0x6E, 0x20, 0x23, 0x37, 0x20, 0x65, 0x73, 0x74, 0x61, 0x62, 0x6C, 0x69, 0x73, 0x68, 0x65, 0x64, 0x2C, 0x20, 0x54, 0x6F, 0x74, 0x61, 0x6C, 0x20, 0x43, 0x6C, 0x69, 0x65, 0x6E, 0x74, 0x73, 0x20, 0x3A, 0x20, 0x31, 0x00
         ];
 
-        let dlt_analyzed_data = data.dlt_parse();
+        let (dlt_analyzed_data, remaining_data) = data.dlt_parse();
 
         println!("{:?}", dlt_analyzed_data);
 
         let expected_header = DltStandardHeader {
             htyp: 61,
-            mcnt: 15,
-            len: 88, // Note the byte order
+            mcnt: 0,
+            len: 32, // Note the byte order
         };
 
         let expected_header_extra = DltStandardHeaderExtra {
@@ -696,45 +747,37 @@ mod tests {
             tmsp: 0x12345678,
         };
 
-        let expected_header_extra_nosession_id = DltStandardHeaderExtraNoSessionID {
-            ecu: *b"ECU1",
-            tmsp: 659251344,
+        let expected_exnteded_header = DltExtendedHeader {
+            msin: 65, // "DLT1"
+            noar: 32,
+            apid: *b"DLTD",
+            ctid: *b"INTM",
         };
 
-
-
         assert_eq!(dlt_analyzed_data[0].standard_header, expected_header);
-        //assert_eq!(dlt_analyzed_data.standard_header_extra, expected_header_extra);
-        assert_eq!(dlt_analyzed_data[0].standard_header_extra_nosession_id, expected_header_extra_nosession_id);
-        // assert_eq!(remaining_data, [0x00, 0x03]);
+        assert_eq!(dlt_analyzed_data[0].extended_header, expected_exnteded_header);
     }
 
     #[test]
     fn test_dlt_paser_log() {
-        let data: [u8; 88] = [
-            0x3d,
-            0x0f, 0x00, 0x58, 0x45, 0x43, 0x55, 0x31, 0x00, 0x00, 0x65, 0x84, 0x27, 0x4b, 0x60, 0x91, 0x41,
-            0x01, 0x44, 0x4c, 0x54, 0x44, 0x49, 0x4e, 0x54, 0x4d, 0x00, 0x02, 0x00, 0x00, 0x38, 0x00, 0x4e,
-            0x65, 0x77, 0x20, 0x63, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x20, 0x63, 0x6f, 0x6e, 0x6e, 0x65, 0x63,
-            0x74, 0x69, 0x6f, 0x6e, 0x20, 0x23, 0x37, 0x20, 0x65, 0x73, 0x74, 0x61, 0x62, 0x6c, 0x69, 0x73,
-            0x68, 0x65, 0x64, 0x2c, 0x20, 0x54, 0x6f, 0x74, 0x61, 0x6c, 0x20, 0x43, 0x6c, 0x69, 0x65, 0x6e,
-            0x74, 0x73, 0x20, 0x3a, 0x20, 0x31, 0x00, 
+        let data: [u8; _] = [
+            0x3D, 0x12, 0x00, 0x78, 0x45, 0x43, 0x55, 0x31, 0x00, 0x02, 0x57, 0x67, 0x82, 0xA2, 0xD2, 0xDF, 0x41, 0x01, 0x44, 0x4C, 0x54, 0x44, 0x49, 0x4E, 0x54, 0x4D, 0x00, 0x02, 0x00, 0x00, 0x58, 0x00, 0x41, 0x70, 0x70, 0x6C, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6F, 0x6E, 0x49, 0x44, 0x20, 0x27, 0x4C, 0x4F, 0x47, 0x27, 0x20, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x65, 0x64, 0x20, 0x66, 0x6F, 0x72, 0x20, 0x50, 0x49, 0x44, 0x20, 0x31, 0x36, 0x31, 0x35, 0x32, 0x33, 0x2C, 0x20, 0x44, 0x65, 0x73, 0x63, 0x72, 0x69, 0x70, 0x74, 0x69, 0x6F, 0x6E, 0x3D, 0x54, 0x65, 0x73, 0x74, 0x20, 0x41, 0x70, 0x70, 0x6C, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6F, 0x6E, 0x20, 0x66, 0x6F, 0x72, 0x20, 0x4C, 0x6F, 0x67, 0x67, 0x69, 0x6E, 0x67, 0x00, 0x35, 0x00, 0x00, 0x65, 0x45, 0x43, 0x55, 0x31, 0x82, 0xA2, 0xD2, 0xE0, 0x26, 0x01, 0x44, 0x41, 0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x03, 0x00, 0x00, 0x00, 0x07, 0x01, 0x00, 0x4C, 0x4F, 0x47, 0x00, 0x01, 0x00, 0x54, 0x45, 0x53, 0x54, 0xFF, 0xFF, 0x18, 0x00, 0x54, 0x65, 0x73, 0x74, 0x20, 0x43, 0x6F, 0x6E, 0x74, 0x65, 0x78, 0x74, 0x20, 0x66, 0x6F, 0x72, 0x20, 0x4C, 0x6F, 0x67, 0x67, 0x69, 0x6E, 0x67, 0x1C, 0x00, 0x54, 0x65, 0x73, 0x74, 0x20, 0x41, 0x70, 0x70, 0x6C, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6F, 0x6E, 0x20, 0x66, 0x6F, 0x72, 0x20, 0x4C, 0x6F, 0x67, 0x67, 0x69, 0x6E, 0x67, 0x72, 0x65, 0x6D, 0x6F, 0x35, 0x00, 0x00, 0x68, 0x45, 0x43, 0x55, 0x31, 0x82, 0xA2, 0xD2, 0xE1, 0x26, 0x01, 0x44, 0x41, 0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x03, 0x00, 0x00, 0x00, 0x07, 0x01, 0x00, 0x4C, 0x4F, 0x47, 0x00, 0x01, 0x00, 0x54, 0x53, 0x31, 0x00, 0xFF, 0xFF, 0x1B, 0x00, 0x54, 0x65, 0x73, 0x74, 0x20, 0x43, 0x6F, 0x6E, 0x74, 0x65, 0x78, 0x74, 0x31, 0x20, 0x66, 0x6F, 0x72, 0x20, 0x69, 0x6E, 0x6A, 0x65, 0x63, 0x74, 0x69, 0x6F, 0x6E, 0x1C, 0x00, 0x54, 0x65, 0x73, 0x74, 0x20, 0x41, 0x70, 0x70, 0x6C, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6F, 0x6E, 0x20, 0x66, 0x6F, 0x72, 0x20, 0x4C, 0x6F, 0x67, 0x67, 0x69, 0x6E, 0x67, 0x72, 0x65, 0x6D, 0x6F, 0x35, 0x00, 0x00, 0x68, 0x45, 0x43, 0x55, 0x31, 0x82, 0xA2, 0xD2, 0xE2, 0x26, 0x01, 0x44, 0x41, 0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x03, 0x00, 0x00, 0x00, 0x07, 0x01, 0x00, 0x4C, 0x4F, 0x47, 0x00, 0x01, 0x00, 0x54, 0x53, 0x32, 0x00, 0xFF, 0xFF, 0x1B, 0x00, 0x54, 0x65, 0x73, 0x74, 0x20, 0x43, 0x6F, 0x6E, 0x74, 0x65, 0x78, 0x74, 0x32, 0x20, 0x66, 0x6F, 0x72, 0x20, 0x69, 0x6E, 0x6A, 0x65, 0x63, 0x74, 0x69, 0x6F, 0x6E, 0x1C, 0x00, 0x54, 0x65, 0x73, 0x74, 0x20, 0x41, 0x70, 0x70, 0x6C, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6F, 0x6E, 0x20, 0x66, 0x6F, 0x72, 0x20, 0x4C, 0x6F, 0x67, 0x67, 0x69, 0x6E, 0x67, 0x72, 0x65, 0x6D, 0x6F, 0x3D, 0x00, 0x00, 0x34, 0x45, 0x43, 0x55, 0x31, 0x00, 0x02, 0x76, 0xF3, 0x82, 0xA2, 0xD2, 0xDC, 0x31, 0x02, 0x4C, 0x4F, 0x47, 0x00, 0x54, 0x45, 0x53, 0x54, 0x23, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x0C, 0x00, 0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x00, 0x3D, 0x01, 0x00, 0x34, 0x45, 0x43, 0x55, 0x31, 0x00, 0x02, 0x76, 0xF3, 0x82, 0xA2, 0xE6, 0x71, 0x31, 0x02, 0x4C, 0x4F, 0x47, 0x00, 0x54, 0x45, 0x53, 0x54, 0x23, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x0C, 0x00, 0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x00, 0x3D, 0x02, 0x00, 0x34, 0x45, 0x43, 0x55, 0x31, 0x00, 0x02, 0x76, 0xF3, 0x82, 0xA2, 0xF9, 0xFD, 0x31, 0x02, 0x4C, 0x4F, 0x47, 0x00, 0x54, 0x45, 0x53, 0x54, 0x23, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x0C, 0x00, 0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x00
         ];
 
-        let dlt_analyzed_data = data.dlt_parse();
+        let (dlt_analyzed_data, remaining_data) = data.dlt_parse();
 
-        println!("{:?}", dlt_analyzed_data);
+        //println!("{:?}", dlt_analyzed_data);
 
         let expected_header = DltStandardHeader {
             htyp: 0x3d,
-            mcnt: 15,
-            len: 88, // Note the byte order
+            mcnt: 18,
+            len: 120, // Note the byte order
         };
 
         let expected_header_extra = DltStandardHeaderExtra {
             ecu: *b"ECU1", // "DLT1"
-            seid: 25988,
-            tmsp: 659251345,
+            seid: 153447,
+            tmsp: 2191708895,
         };
 
         let expected_exnteded_header = DltExtendedHeader {
@@ -744,13 +787,28 @@ mod tests {
             ctid: *b"INTM",
         };
 
-        let payload = *b"New client connection #7 established, Total Clients : 1\0";
+        let payload = *b"ApplicationID 'LOG' registered for PID 161523, Description=Test Application for Logging\0";
+        println!("{:?}", dlt_analyzed_data[0].payload_list.get_entire_string());
 
         assert_eq!(dlt_analyzed_data[0].standard_header, expected_header);
         assert_eq!(dlt_analyzed_data[0].standard_header_extra, expected_header_extra);
-        //assert_eq!(dlt_analyzed_data.standard_header_extra_nosession_id, expected_header_extra_nosession_id);
         assert_eq!(dlt_analyzed_data[0].extended_header, expected_exnteded_header);
+        assert_eq!(dlt_analyzed_data[0].payload_list.get_entire_string().as_bytes(), payload);
+    }
+
+    #[test]
+    fn test_dlt_service_msg() {
+        let data: [u8; _] = [
+            0x35, 0x00, 0x00, 0x27, 0x45, 0x43, 0x55, 0x31, 0x84, 0xEF, 0x38, 0x78, 0x26, 0x01, 0x44, 0x41, 0x31, 0x00, 0x44, 0x43, 0x31, 0x00, 0x01, 0x0F, 0x00, 0x00, 0x00, 0x4C, 0x4F, 0x47, 0x00, 0x54, 0x45, 0x53, 0x54, 0x72, 0x65, 0x6D, 0x6F, 0x3D, 0x39, 0x00, 0x38, 0x45, 0x43, 0x55, 0x31, 0x00, 0x02, 0x57, 0x67, 0x84, 0xEF, 0x38, 0x79, 0x41, 0x01, 0x44, 0x4C, 0x54, 0x44, 0x49, 0x4E, 0x54, 0x4D, 0x00, 0x02, 0x00, 0x00, 0x18, 0x00, 0x55, 0x6E, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x65, 0x64, 0x20, 0x41, 0x70, 0x49, 0x44, 0x20, 0x27, 0x4C, 0x4F, 0x47, 0x27, 0x00
+        ];
+
+        let (dlt_analyzed_data, remaining_data) = data.dlt_parse();
+        println!("{:?}", dlt_analyzed_data);
         
-        assert_eq!(dlt_analyzed_data[0].payload, payload);
+
+        
+        assert_eq!(dlt_analyzed_data.len(), 2);
+        assert_eq!(remaining_data.len(), 0);
+
     }
 }
