@@ -350,7 +350,7 @@ impl MessageList {
                     message_string += &String::from_utf8_lossy(&message.payload);
                 }
                 _ => {
-                    println!("TODO: {:?}", message);
+                    // println!("TODO: {:?}", message);
                 }
             }
         }
@@ -367,11 +367,7 @@ impl MessageList {
         let mut msg_list: Vec<Message> = Vec::new();
         let mut cursor = Cursor::new(data.to_vec());
 
-        println!("Starting to parse payload of {} bytes", len);
-
-        while cursor.position() < len as u64 {
-            println!("Current position: {}, remaining: {}", cursor.position(), len as u64 - cursor.position());
-            
+        while cursor.position() < len as u64 {            
             // FIXED: Read the type info correctly
             if cursor.position() + 4 > len as u64 {
                 println!("Not enough bytes for type header");
@@ -379,11 +375,9 @@ impl MessageList {
             }
             
             let type_byte = cursor.read_u32::<LittleEndian>().expect("Failed to read type byte");
-            println!("Type byte: 0x{:08X}", type_byte);
 
             // FIXED: Extract type length from the first byte
             let type_length = (type_byte & 0x0F) as u8;
-            println!("Type length field: {}", type_length);
 
             let message_type = match Self::parse_type(type_byte) {
                 Some(mt) => mt,
@@ -392,8 +386,6 @@ impl MessageList {
                     break;
                 }
             };
-
-            println!("Detected message type: {:?}", message_type);
 
             match message_type {
                 MessageType::Bool => {
@@ -420,7 +412,6 @@ impl MessageList {
                     }
                     
                     let string_size = cursor.read_u16::<LittleEndian>().expect("Failed to read string size");
-                    println!("String size: {}", string_size);
 
                     if cursor.position() + string_size as u64 > len as u64 {
                         println!("Not enough bytes for string content: need {}, have {}", 
@@ -497,8 +488,6 @@ impl MessageList {
                 }
             }
         }
-
-        println!("Parsed {} messages", msg_list.len());
 
         Self {
             msg_list,

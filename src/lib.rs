@@ -114,6 +114,36 @@ fn dlt_extended_header_size(htyp: &DltHTYP) -> usize {
     }
 }
 
+pub fn find_next_dlt_header(buffer: &[u8], start_offset: usize) -> Option<usize> {
+    if buffer.len() < start_offset + DLT_STANDARD_HEADER_SIZE {
+        return None;
+    }
+
+    for offset in start_offset..=(buffer.len() - DLT_STANDARD_HEADER_SIZE) {
+        if is_valid_dlt_header_at_offset(buffer, offset) {
+            return Some(offset);
+        }
+    }
+    
+    None
+}
+
+/// Check if there's a valid DLT header starting at the given offset
+fn is_valid_dlt_header_at_offset(buffer: &[u8], offset: usize) -> bool {
+    // Ensure we have enough bytes for a standard header
+    if buffer.len() < offset + DLT_STANDARD_HEADER_SIZE {
+        return false;
+    }
+
+    let len = (&buffer[offset + 2..offset + 4]).read_u16::<BigEndian>().unwrap();
+    if len > buffer.len() as u16 || len > 4096 {
+        return false;
+    }
+
+    true
+}
+
+
 pub trait DltParse {
     fn dlt_parse(&self) -> (Vec<DltFormat>, Vec<u8>);
 }
@@ -126,7 +156,6 @@ impl DltParse for [u8] {
         
         loop {
             let remaining_bytes = cursor.get_ref().len() - cursor.position() as usize;
-            println!("Remaining bytes: {}", remaining_bytes);
             let message_start_pos = cursor.position();
             
             // Check if we have enough data for at least a standard header
@@ -139,7 +168,6 @@ impl DltParse for [u8] {
             let dlt_standard_header: DltStandardHeader = dlt_standard_header_parser(&mut cursor);
 
             // Check if we have the complete message
-            println!("Standard Header Length: {}", dlt_standard_header.len);
             if dlt_standard_header.len < DLT_STANDARD_HEADER_SIZE as u16 {
                 let mut remaining_data = Vec::new();
                 cursor.set_position(cursor.position() - DLT_STANDARD_HEADER_SIZE as u64);
@@ -168,7 +196,6 @@ impl DltParse for [u8] {
             let mtin_type = dlt_extended_header.parse().2;
             match mtin_type {
                 Mtin::Log(_) => {
-                    println!("Log Message");
                     
                     // FIXED: Calculate correct payload position and length
                     let headers_size = dlt_standard_header_size() +
@@ -177,13 +204,9 @@ impl DltParse for [u8] {
                     
                     let payload_start = message_start_pos as usize + headers_size;
                     let payload_length = dlt_standard_header.len as usize - headers_size;
-                    
-                    println!("Headers size: {}, Payload start: {}, Payload length: {}", 
-                             headers_size, payload_start, payload_length);
-                    
+                                        
                     if payload_length > 0 && payload_start + payload_length <= cursor.get_ref().len() {
                         let payload_bytes = &cursor.get_ref()[payload_start..payload_start + payload_length];
-                        println!("Payload bytes: {:?}", payload_bytes);
                         payload_list = MessageList::parse(payload_bytes, payload_length);
                     }
                     
@@ -191,11 +214,9 @@ impl DltParse for [u8] {
                     cursor.set_position(message_start_pos + dlt_standard_header.len as u64);
                 },
                 Mtin::Control(_) => {
-                    println!("Control Message");
                     cursor.set_position(message_start_pos + dlt_standard_header.len as u64);
                 },
                 _ => {
-                    println!("Other message type");
                     cursor.set_position(message_start_pos + dlt_standard_header.len as u64);
                 },
             }
@@ -210,7 +231,6 @@ impl DltParse for [u8] {
 
             // Check if we've processed all data
             if cursor.position() >= cursor.get_ref().len() as u64 {
-                println!("All data processed");
                 break;
             }
         }
