@@ -60,21 +60,21 @@ pub struct DltServiceMsg {
 
 #[derive(Debug)]
 pub enum MstpType {
-    DLT_TYPE_LOG,
-    DLT_TYPE_APP_TRACE,
-    DLT_TYPE_NW_TRACE,
-    DLT_TYPE_CONTROL,
+    DltTypeLog,
+    DltTypeAppTrace,
+    DltTypeNwTrace,
+    DltTypeControl,
     Reserved(u8),
     Invalid(u8),
 }
 
 impl MstpType {
     pub fn parse(value: u8) -> MstpType {
-        match (value) {
-            0x0 => MstpType::DLT_TYPE_LOG,
-            0x1 => MstpType::DLT_TYPE_APP_TRACE,
-            0x2 => MstpType::DLT_TYPE_NW_TRACE,
-            0x3 => MstpType::DLT_TYPE_CONTROL,
+        match value {
+            0x0 => MstpType::DltTypeLog,
+            0x1 => MstpType::DltTypeAppTrace,
+            0x2 => MstpType::DltTypeNwTrace,
+            0x3 => MstpType::DltTypeControl,
             0x4..=0x7 => MstpType::Reserved(value), // Fixed: was 0x4..7
             _ => MstpType::Invalid(value),
         }
@@ -84,10 +84,10 @@ impl MstpType {
 impl fmt::Display for MstpType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MstpType::DLT_TYPE_LOG => write!(f, "DLT_TYPE_LOG"),
-            MstpType::DLT_TYPE_APP_TRACE => write!(f, "DLT_TYPE_APP_TRACE"),
-            MstpType::DLT_TYPE_NW_TRACE => write!(f, "DLT_TYPE_NW_TRACE"),
-            MstpType::DLT_TYPE_CONTROL => write!(f, "DLT_TYPE_CONTROL"),
+            MstpType::DltTypeLog => write!(f, "DltTypeLog"),
+            MstpType::DltTypeAppTrace => write!(f, "DltTypeAppTrace"),
+            MstpType::DltTypeNwTrace => write!(f, "DltTypeNwTrace"),
+            MstpType::DltTypeControl => write!(f, "DltTypeControl"),
             MstpType::Reserved(val) => write!(f, "Reserved({})", val),
             MstpType::Invalid(val) => write!(f, "Invalid({})", val),
         }
@@ -96,82 +96,82 @@ impl fmt::Display for MstpType {
 
 #[derive(Debug)]
 pub enum Mtin {
-    Log(MtinType_DLT_LOG),
-    AppTrace(MtinType_DLT_APP_TRACE),
-    NwTrace(MtinType_DLT_NW_TRACE),
-    Control(MtinType_DLT_CONTROL),
+    Log(MtinTypeDltLog),
+    AppTrace(MtinTypeDltAppTrace),
+    NwTrace(MtinTypeDltNwTrace),
+    Control(MtinTypeDltControl),
     Invalid,
 }
 
 
 #[derive(Debug)]
-pub enum MtinType_DLT_LOG{
-    DLT_LOG_FATAL,
-    DLT_LOG_ERROR,
-    DLT_LOG_WARN,
-    DLT_LOG_INFO,
-    DLT_LOG_DEBUG,
-    DLT_LOG_VERBOSE,
+pub enum MtinTypeDltLog{
+    DltLogFatal,
+    DltLogError,
+    DltLogWarn,
+    DltLogInfo,
+    DltLogDebug,
+    DltLogVerbose,
     Reserved(u8),
     Invalid(u8),
 }
 
 #[derive(Debug)]
-pub enum MtinType_DLT_APP_TRACE {
-    DLT_TRACE_VARIABLE,
+pub enum MtinTypeDltAppTrace {
+    DltTraceVariable,
     Reserved(u8),
     Invalid(u8),
 }
 
 #[derive(Debug)]
-pub enum MtinType_DLT_NW_TRACE {
-    DLT_TRACE_VARIABLE,
+pub enum MtinTypeDltNwTrace {
+    DltTraceVariable,
     Reserved(u8),
     Invalid(u8),
 }
 
 #[derive(Debug)]
-pub enum MtinType_DLT_CONTROL {
-    DLT_CONTROL_REQUEST,
-    DLT_CONTROL_RESPONSE,
+pub enum MtinTypeDltControl {
+    DltControlRequest,
+    DltControlResponse,
     Reserved(u8),
     Invalid(u8),
 }
 
-impl MtinType_DLT_LOG {
-    pub fn parse(value: u8) -> MtinType_DLT_LOG {
-        match (value) {
-            0x0 => MtinType_DLT_LOG::DLT_LOG_FATAL,
-            0x1 => MtinType_DLT_LOG::DLT_LOG_ERROR,
-            0x2 => MtinType_DLT_LOG::DLT_LOG_WARN,
-            0x3 => MtinType_DLT_LOG::DLT_LOG_INFO,
-            0x4 => MtinType_DLT_LOG::DLT_LOG_DEBUG,
-            0x5 => MtinType_DLT_LOG::DLT_LOG_VERBOSE,
-            0x6..=0x7 => MtinType_DLT_LOG::Reserved(value), // Fixed: was 0x6..0x7
-            _ => MtinType_DLT_LOG::Invalid(value),
+impl MtinTypeDltLog {
+    pub fn parse(value: u8) -> MtinTypeDltLog {
+        match value {
+            0x0 => MtinTypeDltLog::DltLogFatal,
+            0x1 => MtinTypeDltLog::DltLogError,
+            0x2 => MtinTypeDltLog::DltLogWarn,
+            0x3 => MtinTypeDltLog::DltLogInfo,
+            0x4 => MtinTypeDltLog::DltLogDebug,
+            0x5 => MtinTypeDltLog::DltLogVerbose,
+            0x6..=0x7 => MtinTypeDltLog::Reserved(value), // Fixed: was 0x6..0x7
+            _ => MtinTypeDltLog::Invalid(value),
         }
     }
 }
 
-impl MtinType_DLT_APP_TRACE {
-    pub fn parse(value: u8) -> MtinType_DLT_APP_TRACE {
-        MtinType_DLT_APP_TRACE::Invalid(value)
+impl MtinTypeDltAppTrace {
+    pub fn parse(value: u8) -> MtinTypeDltAppTrace {
+        MtinTypeDltAppTrace::Invalid(value)
     }
 }
 
-impl MtinType_DLT_NW_TRACE {
-    pub fn parse(value: u8) -> MtinType_DLT_NW_TRACE {
-        MtinType_DLT_NW_TRACE::Invalid(value)
+impl MtinTypeDltNwTrace {
+    pub fn parse(value: u8) -> MtinTypeDltNwTrace {
+        MtinTypeDltNwTrace::Invalid(value)
     }
 }
 
-impl MtinType_DLT_CONTROL {
-    pub fn parse(value: u8) -> MtinType_DLT_CONTROL {
-        match (value) {
-            0x1 => MtinType_DLT_CONTROL::DLT_CONTROL_REQUEST,
-            0x2 => MtinType_DLT_CONTROL::DLT_CONTROL_RESPONSE,
-            0x3..=0x7 => MtinType_DLT_CONTROL::Reserved(value), // Fixed: was 0x3..0x7
-            _ => MtinType_DLT_CONTROL::Invalid(value),
+impl MtinTypeDltControl {
+    pub fn parse(value: u8) -> MtinTypeDltControl {
+        match value {
+            0x1 => MtinTypeDltControl::DltControlRequest,
+            0x2 => MtinTypeDltControl::DltControlResponse,
+            0x3..=0x7 => MtinTypeDltControl::Reserved(value), // Fixed: was 0x3..0x7
+            _ => MtinTypeDltControl::Invalid(value),
         }
     }
 }
@@ -272,10 +272,10 @@ impl DltExtendedHeader{
 
         let mstp = MstpType::parse(mstp_val);
         let mtin = match mstp {
-            MstpType::DLT_TYPE_LOG => Mtin::Log(MtinType_DLT_LOG::parse(mtin_val)),
-            MstpType::DLT_TYPE_APP_TRACE => Mtin::AppTrace(MtinType_DLT_APP_TRACE::parse(mtin_val)),
-            MstpType::DLT_TYPE_NW_TRACE => Mtin::NwTrace(MtinType_DLT_NW_TRACE::parse(mtin_val)),
-            MstpType::DLT_TYPE_CONTROL => Mtin::Control(MtinType_DLT_CONTROL::parse(mtin_val)),
+            MstpType::DltTypeLog => Mtin::Log(MtinTypeDltLog::parse(mtin_val)),
+            MstpType::DltTypeAppTrace => Mtin::AppTrace(MtinTypeDltAppTrace::parse(mtin_val)),
+            MstpType::DltTypeNwTrace => Mtin::NwTrace(MtinTypeDltNwTrace::parse(mtin_val)),
+            MstpType::DltTypeControl => Mtin::Control(MtinTypeDltControl::parse(mtin_val)),
             _ => Mtin::Invalid,
         };
 

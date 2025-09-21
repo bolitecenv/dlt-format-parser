@@ -8,6 +8,9 @@ use std::sync::Mutex;
 mod types;
 use crate::types::*;
 
+mod service;
+use crate::service::*;
+
 #[derive(Debug)]
 pub struct DltFormat{
     pub standard_header: DltStandardHeader,
@@ -94,7 +97,7 @@ fn dlt_standard_header_extra_size(htyp: &DltHTYP) -> usize {
     let mut size = 0;
 
     if htyp.WEID {
-        size += DLT_ID_SIZE;
+        size += 4;
     }
     if htyp.WSID {
         size += 4;
@@ -256,7 +259,7 @@ mod tests {
         println!("{:?}", dlt_analyzed_data);
 
         let expected_header = DltStandardHeader {
-            htyp: 61,
+            htyp: 53,
             mcnt: 0,
             len: 32, // Note the byte order
         };
@@ -268,10 +271,10 @@ mod tests {
         };
 
         let expected_exnteded_header = DltExtendedHeader {
-            msin: 65, // "DLT1"
-            noar: 32,
-            apid: *b"DLTD",
-            ctid: *b"INTM",
+            msin: 38, // "DLT1"
+            noar: 1,
+            apid: *b"DA1\0",
+            ctid: *b"DC1\0",
         };
 
         assert_eq!(dlt_analyzed_data[0].standard_header, expected_header);
@@ -307,7 +310,7 @@ mod tests {
             ctid: *b"INTM",
         };
 
-        let payload = *b"ApplicationID 'LOG' registered for PID 161523, Description=Test Application for Logging\0";
+        let payload = *b"ApplicationID 'LOG' registered for PID 161523, Description=Test Application for Logging";
         println!("{:?}", dlt_analyzed_data[0].payload_list.get_entire_string());
 
         assert_eq!(dlt_analyzed_data[0].standard_header, expected_header);
