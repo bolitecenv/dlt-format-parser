@@ -152,51 +152,53 @@ pub trait DltParse {
 }
 
 impl DltParse for [u8] {
-    fn dlt_parse(&mut self) -> Result<(DltFormat, &[u8]), &[u8]> {
+    fn dlt_parse(&self) -> Result<(DltFormat, &[u8]), &[u8]> {
         let mut cursor = Cursor::new(self);
-        
-        // Check if we have enough data for the standard header
+
+        // Check if there's enough data for the standard header
         if self.len() < DLT_STANDARD_HEADER_SIZE {
             return Err(self);
         }
-        
+
         // Parse standard header
         let dlt_standard_header: DltStandardHeader = dlt_standard_header_parser(&mut cursor);
         let dlt_message_len = dlt_standard_header.len as usize;
 
-        // Check if we have the complete message
-        if dlt_message_len < DLT_STANDARD_HEADER_SIZE as usize {
+        // Sanity check: DLT message must not be shorter than header size
+        if dlt_message_len < DLT_STANDARD_HEADER_SIZE {
             return Err(self);
         }
-        
-        // Check if we have enough data for the complete message
+
+        // Make sure we have the full message available
         if self.len() < dlt_message_len {
             return Err(self);
         }
-        
+
         let htyp = dlt_standard_header.get_htyp();
-        
-        let dlt_standard_header_extra: DltStandardHeaderExtra = dlt_standard_header_extra_parser(&htyp, &mut cursor);
-        
-        let dlt_extended_header: DltExtendedHeader = dlt_extended_header_parser(&htyp, &mut cursor);
-        
+
+        let dlt_standard_header_extra: DltStandardHeaderExtra =
+            dlt_standard_header_extra_parser(&htyp, &mut cursor);
+
+        let dlt_extended_header: DltExtendedHeader =
+            dlt_extended_header_parser(&htyp, &mut cursor);
+
         let current_pos = cursor.position() as usize;
-        let payload_len = dlt_message_len as usize - current_pos;
-        
-        // Ensure we don't read beyond the message boundary
+        let payload_len = dlt_message_len - current_pos;
+
+        // Confirm we won't read out of bounds
         if current_pos + payload_len > self.len() {
             return Err(self);
         }
-        
+
         let mut payload_buf = vec![0u8; payload_len];
         if let Err(_) = cursor.read_exact(&mut payload_buf) {
             return Err(self);
         }
 
-        let headers_size = dlt_standard_header_size() +
-                                     dlt_standard_header_extra_size(&htyp) +
-                                     dlt_extended_header_size(&htyp);
-        
+        let headers_size = dlt_standard_header_size()
+            + dlt_standard_header_extra_size(&htyp)
+            + dlt_extended_header_size(&htyp);
+
         let dlt_format = DltFormat {
             standard_header: dlt_standard_header,
             standard_header_extra: dlt_standard_header_extra,
@@ -205,11 +207,13 @@ impl DltParse for [u8] {
             payload: payload_buf,
         };
 
-        self = self[dlt_message_len..].as_ref();
-        
-        Ok((dlt_format, remaining_data))
+        // Get remaining bytes after this DLT message
+        let remaining = &self[dlt_message_len..];
+
+        Ok((dlt_format, remaining))
     }
 }
+
 
 
 #[cfg(test)]
