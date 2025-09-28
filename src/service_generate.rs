@@ -113,8 +113,6 @@ mod tests {
                 assert_eq!(dlt_format.standard_header.htyp, UEH_MASK | MSBF_MASK | WTMS_MASK);
 
                 assert_eq!(dlt_format.payload, service_payload); // Service ID for GetSoftwareVersion
-                
-                
             },
             Err(_) => panic!("Failed to parse generated DLT message"),
         }

@@ -287,6 +287,33 @@ impl ToBytes for ServiceSetMessageFilteringRequest {
     }
 }
 
+pub struct ServiceGetSoftwareVersionResponse {
+    pub status: u8,
+    pub len: u32,
+    pub version: String,
+}
+
+impl FromBytes for ServiceGetSoftwareVersionResponse {
+    fn from_bytes(data: &[u8]) -> Result<Self, ParseError> {
+        if data.len() < 5 {
+            return Err(ParseError::InsufficientData { expected: 5, actual: data.len() });
+        }
+        
+        let status = data[0];
+        let len = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+        
+        if data.len() < 5 + len as usize {
+            return Err(ParseError::InsufficientData { expected: 5 + len as usize, actual: data.len() });
+        }
+        
+        let version_bytes = &data[5..5 + len as usize];
+        let version = String::from_utf8(version_bytes.to_vec())
+            .map_err(|e| ParseError::InvalidData(format!("Invalid UTF-8 in version string: {}", e)))?;
+        
+        Ok(Self { status, len, version })
+    }
+}
+
 // Response structures
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceResponse {
@@ -379,7 +406,7 @@ pub trait ServiceHandler {
         Err(ServiceError::HandlerError("SetDefaultTraceStatus not implemented".to_string()))
     }
     
-    fn handle_get_software_version(&mut self) -> ServiceResult<ServiceResponse> {
+    fn handle_get_software_version(&mut self, version: &String) -> ServiceResult<ServiceResponse> {
         Err(ServiceError::HandlerError("GetSoftwareVersion not implemented".to_string()))
     }
     
@@ -478,7 +505,12 @@ impl ServiceParser {
                     handler.handle_set_default_trace_status(message.payload[0])?
                 }
                 ServiceType::GetSoftwareVersion => {
-                    handler.handle_get_software_version()?
+                    if message.payload.len() < 4 {
+                        return Err(ServiceError::ParseError(ParseError::InsufficientData { expected: 4, actual: message.payload.len() }));
+                    }
+                    let software_version = ServiceGetSoftwareVersionResponse::from_bytes(&message.payload)?;
+
+                    handler.handle_get_software_version(&software_version.version)?
                 }
                 ServiceType::GetDefaultTraceStatus => {
                     handler.handle_get_default_trace_status()?
@@ -525,7 +557,7 @@ impl ServiceParser {
             service_id_bytes[2],
             service_id_bytes[3]
         ]);
-        let payload = data[1..].to_vec();
+        let payload = data[4..].to_vec();
         
         Ok(ServiceMessage::new(service_id, payload))
     }
