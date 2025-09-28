@@ -26,7 +26,7 @@ pub enum ServiceType {
 }
 
 impl ServiceType {
-    pub fn from_u8(value: u8) -> Option<Self> {
+    pub fn from_u32(value: u32) -> Option<Self> {
         match value {
             0x01 => Some(ServiceType::SetLogLevel),
             0x02 => Some(ServiceType::SetTraceStatus),
@@ -315,7 +315,7 @@ impl ToBytes for ServiceResponse {
 /// Error types for service parsing
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceError {
-    UnknownServiceId(u8),
+    UnknownServiceId(u32),
     ParseError(ParseError),
     HandlerError(String),
 }
@@ -398,7 +398,7 @@ pub trait ServiceHandler {
     // Add more handlers for remaining services...
     
     /// Handle unknown service IDs
-    fn handle_unknown_service(&mut self, service_id: u8, payload: &[u8]) -> ServiceResult<ServiceResponse> {
+    fn handle_unknown_service(&mut self, service_id: u32, payload: &[u8]) -> ServiceResult<ServiceResponse> {
         Err(ServiceError::UnknownServiceId(service_id))
     }
 }
@@ -406,17 +406,17 @@ pub trait ServiceHandler {
 /// Service message structure
 #[derive(Debug, Clone)]
 pub struct ServiceMessage {
-    pub service_id: u8,
+    pub service_id: u32,
     pub payload: Vec<u8>,
 }
 
 impl ServiceMessage {
-    pub fn new(service_id: u8, payload: Vec<u8>) -> Self {
+    pub fn new(service_id: u32, payload: Vec<u8>) -> Self {
         Self { service_id, payload }
     }
     
     pub fn service_type(&self) -> Option<ServiceType> {
-        ServiceType::from_u8(self.service_id)
+        ServiceType::from_u32(self.service_id)
     }
 }
 
@@ -517,7 +517,14 @@ impl ServiceParser {
             return Err(ServiceError::ParseError(ParseError::InsufficientData { expected: 1, actual: 0 }));
         }
         
-        let service_id = data[0];
+        // Extract 32-bit service_id from first 4 bytes
+        let service_id_bytes = &data[0..4];
+        let service_id = u32::from_le_bytes([
+            service_id_bytes[0],
+            service_id_bytes[1], 
+            service_id_bytes[2],
+            service_id_bytes[3]
+        ]);
         let payload = data[1..].to_vec();
         
         Ok(ServiceMessage::new(service_id, payload))
@@ -600,6 +607,7 @@ mod tests {
         payload.extend_from_slice(b"CTX1");
         payload.push(0x03);
         payload.extend_from_slice(b"RES1");
+
         
         let request = ServiceSetLogLevelRequest::from_bytes(&payload).unwrap();
         assert_eq!(request.apid, *b"APP1");
@@ -610,5 +618,30 @@ mod tests {
         // Test round-trip serialization
         let serialized = request.to_bytes();
         assert_eq!(serialized, payload);
+    }
+
+    #[test]
+    fn test_binary_service_message_creation() {
+        // Test ServiceMessage with various binary patterns
+        let test_cases = vec![
+            (0x01, vec![]), // Empty payload
+            (0xFF, vec![0x00]), // Max service ID with null payload
+            (0x00, vec![0xFF, 0xFE, 0xFD]), // Min service ID with high byte payload
+            (0x7F, vec![0x80, 0x81, 0x82]), // Boundary service ID
+        ];
+
+        for (service_id, payload) in test_cases {
+            let message = ServiceMessage::new(service_id, payload.clone());
+            assert_eq!(message.service_id, service_id);
+            assert_eq!(message.payload, payload);
+            
+            // Test service type detection
+            let service_type = message.service_type();
+            if ServiceType::from_u32(service_id).is_some() {
+                assert!(service_type.is_some());
+            } else {
+                assert!(service_type.is_none());
+            }
+        }
     }
 }

@@ -188,12 +188,12 @@ impl DltStandardHeader {
         DltHTYP { UEH, MSBF, WEID, WSID, WTMS, VERS }
     }
 
-    pub fn generate_packet(&self) -> Vec<u8> {
+    pub fn serialize(&self) -> Vec<u8> {
         let mut packet = Vec::new();
 
-        packet.extend(&self.htyp.to_le_bytes());
-        packet.extend(&self.mcnt.to_le_bytes());
-        packet.extend(&self.len.to_le_bytes());
+        packet.extend(&self.htyp.to_be_bytes());
+        packet.extend(&self.mcnt.to_be_bytes());
+        packet.extend(&self.len.to_be_bytes());
 
         packet
     }
@@ -217,12 +217,18 @@ impl DltStandardHeaderExtra {
     }
 
     // TODO: make switch for parameters
-    pub fn generate_packet(&self) -> Vec<u8> {
+    pub fn serialize(&self, htype: u8) -> Vec<u8> {
         let mut packet = Vec::new();
 
-        packet.extend_from_slice(&self.ecu);
-        packet.extend(&self.seid.to_le_bytes());
-        packet.extend(&self.tmsp.to_le_bytes());
+        if (htype & WEID_MASK) != 0 {
+            packet.extend_from_slice(&self.ecu);
+        }
+        if (htype & WSID_MASK) != 0 {
+            packet.extend(&self.seid.to_be_bytes());
+        }
+        if (htype & WTMS_MASK) != 0 {
+            packet.extend(&self.tmsp.to_be_bytes());
+        }
 
         packet
     }
@@ -253,11 +259,11 @@ impl DltExtendedHeader{
     }
 
     // TODO: make switch for parameters
-    pub fn generate_packet(&self) -> Vec<u8> {
+    pub fn serialize(&self) -> Vec<u8> {
         let mut packet = Vec::new();
 
-        packet.extend(&self.msin.to_le_bytes());
-        packet.extend(&self.noar.to_le_bytes());
+        packet.extend(&self.msin.to_be_bytes());
+        packet.extend(&self.noar.to_be_bytes());
         packet.extend_from_slice(&self.apid);
         packet.extend_from_slice(&self.ctid);
 

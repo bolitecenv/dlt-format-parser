@@ -11,6 +11,9 @@ pub use crate::types::*;
 mod service;
 pub use crate::service::*;
 
+mod service_generate;
+pub use crate::service_generate::*;
+
 #[derive(Debug)]
 pub struct DltFormat{
     pub standard_header: DltStandardHeader,
@@ -63,31 +66,6 @@ fn dlt_extended_header_parser(htyp: &DltHTYP , cursor: &mut Cursor<&[u8]>) -> Dl
     cursor.read_exact(&mut ctid).unwrap();
 
     DltExtendedHeader { msin, noar, apid, ctid }
-}
-
-fn dlt_service_parser(cursor: &mut Cursor<Vec<u8>>, len: usize) -> MessageList {
-    let mut payload_header = vec![0u8; 6];
-    let mut payload = vec![0u8; len];
-
-    match cursor.read_exact(&mut payload_header) {
-        Ok(_) => {
-            println!("Sucess");
-        }
-        Err(e) => {
-            println!("Error {}", e);
-        }
-    }
-    match cursor.read_exact(&mut payload) {
-        Ok(_) => {
-            println!("Sucess");
-        }
-        Err(e) => {
-            println!("Error {}", e);
-        }
-    }
-
-    let message = MessageList::default();
-    message
 }
 
 fn dlt_standard_header_size() -> usize {
