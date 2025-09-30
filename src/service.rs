@@ -276,8 +276,8 @@ impl TryFrom<u8> for LogInfoStatus {
 #[derive(Debug, Clone)]
 pub struct ContextIdInfo {
     pub context_id: [u8; DLT_ID_SIZE],
-    pub log_level: u8,  // enum 0x00 .. 0x06
-    pub trace_status: u8,
+    pub log_level: i8,  // enum 0x00 .. 0x06
+    pub trace_status: i8,
     pub context_description: Option<Vec<u8>>,  // Only for status 7
 }
 
@@ -304,125 +304,94 @@ pub struct ServiceGetLogInfoResponse {
 
 impl FromBytes for ServiceGetLogInfoResponse {
     fn from_bytes(data: &[u8]) -> Result<Self, ParseError> {
-        // Minimum size: status (1) + reserved (4) = 5 bytes
-        if data.len() < 5 {
-            return Err(ParseError::InsufficientData {
-                expected: 5,
-                actual: data.len(),
-            });
+    // Minimum size: status (1) + reserved (4) = 5 bytes
+    if data.len() < 5 {
+        return Err(ParseError::InsufficientData {
+            expected: 5,
+            actual: data.len(),
+        });
+    }
+    
+    let status = data[0];
+    let status_enum = LogInfoStatus::try_from(status)?;
+    println!("Status: {} ({:?})", status, status_enum);
+    
+    // Reserved bytes are at the end
+    let data_end = data.len() - 4;
+    let mut reserved = [0u8; 4];
+    reserved.copy_from_slice(&data[data_end..]);
+    
+    let log_info_data = match status_enum {
+        LogInfoStatus::NotSupported | 
+        LogInfoStatus::DltError | 
+        LogInfoStatus::NoMatchingContextIds |
+        LogInfoStatus::ResponseDataOverflow => {
+            LogInfoData::None
         }
-        
-        let status = data[0];
-        let status_enum = LogInfoStatus::try_from(status)?;
-        println!("status:: {}", status);
-        // Reserved bytes are at the end
-        let data_end = data.len() - 4;
-        let mut reserved = [0u8; 4];
-        reserved.copy_from_slice(&data[data_end..]);
-        
-        let log_info_data = match status_enum {
-            LogInfoStatus::NotSupported | 
-            LogInfoStatus::DltError | 
-            LogInfoStatus::NoMatchingContextIds |
-            LogInfoStatus::ResponseDataOverflow => {
-                // No application ID data for these statuses
-                LogInfoData::None
+        LogInfoStatus::UnregisteredInfo |
+        LogInfoStatus::RegisteredWithLogLevel |
+        LogInfoStatus::RegisteredWithDescriptions => {
+            if data.len() < 7 {
+                return Err(ParseError::InsufficientData {
+                    expected: 7,
+                    actual: data.len(),
+                });
             }
-            LogInfoStatus::UnregisteredInfo |
-            LogInfoStatus::RegisteredWithLogLevel |
-            LogInfoStatus::RegisteredWithDescriptions => {
-                // Parse application IDs data
-                if data.len() < 7 {  // status(1) + app_count(2) + reserved(4)
+            
+            let mut offset = 1;
+            let app_id_count = u16::from_le_bytes([data[offset], data[offset + 1]]);
+            offset += 2;
+            println!("App ID count: {}", app_id_count);
+            
+            let mut app_ids = Vec::new();
+            
+            for app_idx in 0..app_id_count {
+                if offset + DLT_ID_SIZE > data_end {
                     return Err(ParseError::InsufficientData {
-                        expected: 7,
-                        actual: data.len(),
+                        expected: offset + DLT_ID_SIZE,
+                        actual: data_end,
                     });
                 }
                 
-                let mut offset = 1;  // Skip status byte
-                let app_id_count = u16::from_be_bytes([data[offset], data[offset + 1]]);
+                let mut app_id = [0u8; DLT_ID_SIZE];
+                app_id.copy_from_slice(&data[offset..offset + DLT_ID_SIZE]);
+                offset += DLT_ID_SIZE;
+                println!("App ID: {:?}", String::from_utf8_lossy(&app_id));
+                
+                if offset + 2 > data_end {
+                    return Err(ParseError::InsufficientData {
+                        expected: offset + 2,
+                        actual: data_end,
+                    });
+                }
+                
+                let context_id_count = u16::from_le_bytes([data[offset], data[offset + 1]]);
                 offset += 2;
+                println!("  Context ID count: {}", context_id_count);
                 
-                let mut app_ids = Vec::new();
+                let mut context_id_list = Vec::new();
                 
-                for _ in 0..app_id_count {
-                    if offset + DLT_ID_SIZE > data_end {
+                for ctx_idx in 0..context_id_count {
+                    if offset + DLT_ID_SIZE + 2 > data_end {
                         return Err(ParseError::InsufficientData {
-                            expected: offset + DLT_ID_SIZE,
+                            expected: offset + DLT_ID_SIZE + 2,
                             actual: data_end,
                         });
                     }
                     
-                    let mut app_id = [0u8; DLT_ID_SIZE];
-                    app_id.copy_from_slice(&data[offset..offset + DLT_ID_SIZE]);
+                    let mut context_id = [0u8; DLT_ID_SIZE];
+                    context_id.copy_from_slice(&data[offset..offset + DLT_ID_SIZE]);
                     offset += DLT_ID_SIZE;
+                    println!("    Context ID: {:?}", String::from_utf8_lossy(&context_id));
                     
-                    if offset + 2 > data_end {
-                        return Err(ParseError::InsufficientData {
-                            expected: offset + 2,
-                            actual: data_end,
-                        });
-                    }
+                    let log_level = data[offset] as i8;
+                    offset += 1;
                     
-                    let context_id_count = u16::from_be_bytes([data[offset], data[offset + 1]]);
-                    offset += 2;
+                    let trace_status = data[offset] as i8;
+                    offset += 1;
+                    println!("    Log level: {}, Trace status: {}", log_level, trace_status);
                     
-                    let mut context_id_list = Vec::new();
-                    
-                    for _ in 0..context_id_count {
-                        if offset + DLT_ID_SIZE + 2 > data_end {
-                            return Err(ParseError::InsufficientData {
-                                expected: offset + DLT_ID_SIZE + 2,
-                                actual: data_end,
-                            });
-                        }
-                        
-                        let mut context_id = [0u8; DLT_ID_SIZE];
-                        context_id.copy_from_slice(&data[offset..offset + DLT_ID_SIZE]);
-                        offset += DLT_ID_SIZE;
-                        
-                        let log_level = data[offset];
-                        offset += 1;
-                        
-                        let trace_status = data[offset];
-                        offset += 1;
-                        
-                        let context_description = if status == 7 {
-                            // Parse context description for verbose mode
-                            if offset + 2 > data_end {
-                                return Err(ParseError::InsufficientData {
-                                    expected: offset + 2,
-                                    actual: data_end,
-                                });
-                            }
-                            
-                            let len_context_desc = u16::from_be_bytes([data[offset], data[offset + 1]]);
-                            offset += 2;
-                            
-                            if offset + len_context_desc as usize > data_end {
-                                return Err(ParseError::InsufficientData {
-                                    expected: offset + len_context_desc as usize,
-                                    actual: data_end,
-                                });
-                            }
-                            
-                            let desc = data[offset..offset + len_context_desc as usize].to_vec();
-                            offset += len_context_desc as usize;
-                            Some(desc)
-                        } else {
-                            None
-                        };
-                        
-                        context_id_list.push(ContextIdInfo {
-                            context_id,
-                            log_level,
-                            trace_status,
-                            context_description,
-                        });
-                    }
-                    
-                    let app_description = if status == 7 {
-                        // Parse app description for verbose mode
+                    let context_description = if status == 7 || status == 8 {
                         if offset + 2 > data_end {
                             return Err(ParseError::InsufficientData {
                                 expected: offset + 2,
@@ -430,44 +399,79 @@ impl FromBytes for ServiceGetLogInfoResponse {
                             });
                         }
                         
-                        let app_desc_len = u16::from_be_bytes([data[offset], data[offset + 1]]);
+                        let len_context_desc = u16::from_le_bytes([data[offset], data[offset + 1]]);
                         offset += 2;
                         
-                        if offset + app_desc_len as usize > data_end {
+                        if offset + len_context_desc as usize > data_end {
                             return Err(ParseError::InsufficientData {
-                                expected: offset + app_desc_len as usize,
+                                expected: offset + len_context_desc as usize,
                                 actual: data_end,
                             });
                         }
                         
-                        let desc = data[offset..offset + app_desc_len as usize].to_vec();
-                        offset += app_desc_len as usize;
+                        let desc = data[offset..offset + len_context_desc as usize].to_vec();
+                        offset += len_context_desc as usize;
+                        println!("    Context desc: {:?}", String::from_utf8_lossy(&desc));
                         Some(desc)
                     } else {
                         None
                     };
                     
-                    app_ids.push(AppIdInfo {
-                        app_id,
-                        context_id_count,
-                        context_id_list,
-                        app_description,
+                    context_id_list.push(ContextIdInfo {
+                        context_id,
+                        log_level,
+                        trace_status,
+                        context_description,
                     });
                 }
                 
-                LogInfoData::ApplicationIds(app_ids)
+                let app_description = if status == 7 || status == 8 {
+                    if offset + 2 > data_end {
+                        return Err(ParseError::InsufficientData {
+                            expected: offset + 2,
+                            actual: data_end,
+                        });
+                    }
+                    
+                    let app_desc_len = u16::from_le_bytes([data[offset], data[offset + 1]]);
+                    offset += 2;
+                    
+                    if offset + app_desc_len as usize > data_end {
+                        return Err(ParseError::InsufficientData {
+                            expected: offset + app_desc_len as usize,
+                            actual: data_end,
+                        });
+                    }
+                    
+                    let desc = data[offset..offset + app_desc_len as usize].to_vec();
+                    offset += app_desc_len as usize;
+                    println!("  App desc: {:?}", String::from_utf8_lossy(&desc));
+                    Some(desc)
+                } else {
+                    None
+                };
+                
+                app_ids.push(AppIdInfo {
+                    app_id,
+                    context_id_count,
+                    context_id_list,
+                    app_description,
+                });
             }
-            LogInfoStatus::Reserved3 | LogInfoStatus::Reserved4 => {
-                // Handle reserved statuses - treat as no data
-                LogInfoData::None
-            }
-        };
-        
-        Ok(Self {
-            status,
-            log_info_data,
-            reserved,
-        })
+            
+            LogInfoData::ApplicationIds(app_ids)
+        }
+        LogInfoStatus::Reserved3 | LogInfoStatus::Reserved4 => {
+            LogInfoData::None
+        }
+    };
+    
+    Ok(Self {
+        status,
+        log_info_data,
+        reserved,
+    })
+
     }
 }
 
@@ -497,8 +501,8 @@ impl ToBytes for ServiceGetLogInfoResponse {
                     // Add context IDs
                     for ctx_info in &app_info.context_id_list {
                         result.extend_from_slice(&ctx_info.context_id);
-                        result.push(ctx_info.log_level);
-                        result.push(ctx_info.trace_status);
+                        result.push(ctx_info.log_level as u8);
+                        result.push(ctx_info.trace_status as u8);
                         
                         // Add context description if status is 7 (verbose mode)
                         if self.status == 7 {
