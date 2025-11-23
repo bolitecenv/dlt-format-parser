@@ -23,6 +23,17 @@ pub struct DltFormat{
     pub payload: Vec<u8>,
 }
 
+impl DltFormat {
+    pub fn get_timestamp_string(&self) -> String {
+        if self.standard_header.is_tmsp_enabled() == false {
+            return "N/A".to_string();
+        }
+
+        let tmsp = self.standard_header_extra.tmsp;
+        format!("{}", tmsp)
+    }
+}
+
 fn dlt_standard_header_parser(cursor: &mut Cursor<&[u8]>) -> DltStandardHeader {
     //let mut cursor = Cursor::new(data);
 
@@ -119,6 +130,7 @@ fn is_valid_dlt_header_at_offset(buffer: &[u8], offset: usize) -> bool {
 
     let len = (&buffer[offset + 2..offset + 4]).read_u16::<BigEndian>().unwrap();
     if len > buffer.len() as u16 || len > 4096 {
+        println!("Invalid DLT message length: {}", len);
         return false;
     }
 

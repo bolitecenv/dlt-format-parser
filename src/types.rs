@@ -202,6 +202,10 @@ impl DltStandardHeader {
         let VERS: u8 = (self.htyp & VERS_MASK) >> 5;
         VERS
     }
+
+    pub fn is_tmsp_enabled(&self) -> bool {
+        (self.htyp & WTMS_MASK) != 0
+    }
 }
 
 impl DltStandardHeaderExtra {

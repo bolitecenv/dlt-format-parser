@@ -23,6 +23,15 @@ pub fn dlt_generate_service_get_software_version_request() -> Vec<u8> {
     dlt_create_service_format(&service_payload, ServiceControlType::Request)
 }
 
+pub fn dlt_swc_injection_request(swc_id: u32, swc_data: &[u8], sec_data_len: u32) -> Vec<u8> {
+    let mut service_payload = Vec::new();
+    service_payload.extend_from_slice(&swc_id.to_be_bytes());
+    service_payload.extend_from_slice(&sec_data_len.to_be_bytes());
+    service_payload.extend_from_slice(swc_data);
+
+    dlt_create_service_format(&service_payload, ServiceControlType::Request)
+}
+
 fn dlt_create_service_format(service_payload: &[u8], service_type: ServiceControlType) -> Vec<u8> {
     
     let dlt_standard_header = DltStandardHeader {
