@@ -107,34 +107,28 @@ fn dlt_extended_header_size(htyp: &DltHTYP) -> usize {
     }
 }
 
-pub fn find_next_dlt_header(buffer: &[u8], start_offset: usize) -> Option<usize> {
-    if buffer.len() < start_offset + DLT_STANDARD_HEADER_SIZE {
-        return None;
+pub fn find_dlt_header(buffer: &[u8], start_offset: usize) -> Option<u32> {
+    let (is_valid, _len) = is_valid_dlt_header_at_offset(buffer, start_offset);
+    if is_valid {
+        return Some(_len);
     }
-
-    for offset in start_offset..=(buffer.len() - DLT_STANDARD_HEADER_SIZE) {
-        if is_valid_dlt_header_at_offset(buffer, offset) {
-            return Some(offset);
-        }
-    }
-    
     None
 }
 
 /// Check if there's a valid DLT header starting at the given offset
-fn is_valid_dlt_header_at_offset(buffer: &[u8], offset: usize) -> bool {
+fn is_valid_dlt_header_at_offset(buffer: &[u8], offset: usize) -> (bool, u32) {
     // Ensure we have enough bytes for a standard header
-    if buffer.len() < offset + DLT_STANDARD_HEADER_SIZE {
-        return false;
+    if (buffer.len() - offset) <  DLT_STANDARD_HEADER_SIZE {
+        return (false, 0);
     }
 
     let len = (&buffer[offset + 2..offset + 4]).read_u16::<BigEndian>().unwrap();
-    if len > buffer.len() as u16 || len > 4096 {
+    if len > buffer.len() as u16 {
         println!("Invalid DLT message length: {}", len);
-        return false;
+        return (false, 0);
     }
 
-    true
+    (true, len.into())
 }
 
 pub trait DltParse {
