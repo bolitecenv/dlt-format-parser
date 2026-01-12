@@ -11,7 +11,7 @@ pub use crate::types::*;
 mod service;
 pub use crate::service::*;
 
-mod service_generate;
+pub mod service_generate;
 pub use crate::service_generate::*;
 
 #[derive(Debug)]
